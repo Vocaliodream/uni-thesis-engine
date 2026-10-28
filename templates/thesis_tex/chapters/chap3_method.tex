@@ -1,0 +1,35 @@
+\chapter{Methodology}
+\label{chap:method}
+
+\section{Experimental protocol}
+All settings of the study (data source, competing methods, metrics, number of repetitions and
+random seed) are declared in the topic profile \texttt{\ThesisProfileId}. Each configuration is
+evaluated over independent repeated runs, and every run is recorded in a result bundle stamped
+with the source-code commit and the SHA-256 digest of the input data.
+
+\ifAutoHasRsm
+\section{Response surface methodology}
+The process factors are explored with a central composite design comprising factorial, axial and
+replicated centre points. The response is modelled by the second-order polynomial
+\begin{equation}
+  \hat{y} = \beta_{0} + \sum_{i} \beta_{i} x_{i} + \sum_{i} \beta_{ii} x_{i}^{2}
+            + \sum_{i<j} \beta_{ij} x_{i} x_{j},
+\end{equation}
+fitted by ordinary least squares. Model significance is assessed by an $F$-test, adequacy by the
+lack-of-fit test against pure error, and the stationary point is classified from the eigenvalues
+of the quadratic form.
+\fi
+
+\ifAutoHasAblation
+\section{Ablation design}
+The contribution of each core module is isolated by evaluating cumulative or leave-one-out
+configurations of the full system under identical conditions.
+\fi
+
+\section{Statistical analysis}
+For every metric, normality is examined with the Shapiro--Wilk test and homogeneity of variance
+with Levene's test. Two-group comparisons are routed to the paired or Student $t$-test, Welch's
+$t$-test, the Wilcoxon signed-rank test or the Mann--Whitney $U$ test according to these
+diagnostics, and are accompanied by Cohen's $d$ or the rank-biserial correlation. Comparisons of
+several groups use one-way ANOVA with Tukey's HSD or the Kruskal--Wallis $H$ test. Significance
+markers follow the conventional thresholds stated beneath each table.

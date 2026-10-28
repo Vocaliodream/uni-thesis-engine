@@ -37,6 +37,7 @@ __all__ = [
     "rank_biserial_independent",
     "fit_response_surface",
     "rsm_predict",
+    "slice_response_surface",
     "StatisticalRouter",
     "load_raw_samples",
 ]
@@ -151,24 +152,40 @@ def fit_response_surface(X: Union[np.ndarray, Sequence[Sequence[float]]], y: Seq
     else:
         f_val, p_val = float("inf"), 0.0
 
-    k = len(names)
-    b = beta[1:1 + k]
-    B = np.zeros((k, k))
-    for (label, idx), coef in zip(terms, beta):
-        if len(idx) == 2:
-            i, j = idx
-            if i == j:
-                B[i, i] = coef
-            else:
-                B[i, j] = B[j, i] = coef / 2.0
-    stationary: Optional[Dict[str, Any]] = None
-    if abs(np.linalg.det(B)) > 1e-12 * max(1.0, float(np.max(np.abs(B))) ** k):
-        xs = -0.5 * np.linalg.solve(B, b)
-        eig = np.linalg.eigvalsh(B)
-        nature = "maximum" if np.all(eig < 0) else "minimum" if np.all(eig > 0) else "saddle"
-        ys = float((_rsm_matrix(xs[None, :], terms) @ beta)[0])
-        stationary = {"point": {nm: float(v) for nm, v in zip(names, xs)}, "predicted_response": ys,
-                      "nature": nature, "eigenvalues": [float(e) for e in eig]}
+    # per-term t-tests and sequential-free ANOVA decomposition (with lack of fit
+    # versus pure error when replicated design points exist)
+    term_stats: Dict[str, Dict[str, Any]] = {}
+    if df_res > 0 and sse > 0:
+        mse = sse / df_res
+        cov = mse * np.linalg.pinv(A.T @ A)
+        for (label, _), coef, var in zip(terms, beta, np.diag(cov)):
+            se = float(math.sqrt(max(var, 0.0)))
+            t_val = float(coef / se) if se > 0 else float("inf")
+            p_t = float(2 * stats.t.sf(abs(t_val), df_res)) if math.isfinite(t_val) else 0.0
+            term_stats[label] = {"coef": float(coef), "se": se, "t": t_val if math.isfinite(t_val) else None,
+                                 "p_value": p_t, "significance": significance_stars(p_t)}
+    keys = [tuple(np.round(row, 12)) for row in Xa]
+    groups: Dict[Tuple[float, ...], List[float]] = {}
+    for key, val in zip(keys, ya):
+        groups.setdefault(key, []).append(float(val))
+    ss_pe = float(sum(np.sum((np.asarray(g) - np.mean(g)) ** 2) for g in groups.values()))
+    df_pe = int(sum(len(g) - 1 for g in groups.values()))
+    anova: List[Dict[str, Any]] = [{"source": "Model", "ss": float(ssr), "df": int(p), "ms": float(ssr / p),
+                                    "f": float(f_val) if math.isfinite(f_val) else None,
+                                    "p_value": float(min(max(p_val, 0.0), 1.0))},
+                                   {"source": "Residual", "ss": sse, "df": int(df_res),
+                                    "ms": sse / df_res if df_res else None, "f": None, "p_value": None}]
+    df_lof = int(df_res - df_pe)
+    if df_pe > 0 and df_lof > 0 and ss_pe > 0:
+        ss_lof = max(sse - ss_pe, 0.0)
+        f_lof = (ss_lof / df_lof) / (ss_pe / df_pe)
+        p_lof = float(stats.f.sf(f_lof, df_lof, df_pe))
+        anova += [{"source": "Lack of fit", "ss": ss_lof, "df": df_lof, "ms": ss_lof / df_lof, "f": float(f_lof),
+                   "p_value": p_lof},
+                  {"source": "Pure error", "ss": ss_pe, "df": df_pe, "ms": ss_pe / df_pe, "f": None, "p_value": None}]
+    anova.append({"source": "Total", "ss": sst, "df": int(n - 1), "ms": None, "f": None, "p_value": None})
+
+    stationary = _stationary_point(names, terms, beta)
     return {
         "test": "rsm_quadratic_ols",
         "factors": list(names),
@@ -183,7 +200,67 @@ def fit_response_surface(X: Union[np.ndarray, Sequence[Sequence[float]]], y: Seq
         "p_value": float(min(max(p_val, 0.0), 1.0)),
         "significance": significance_stars(p_val),
         "stationary_point": stationary,
+        "term_stats": term_stats,
+        "anova": anova,
     }
+
+
+def _stationary_point(names: Sequence[str], terms: Sequence[Tuple[str, Tuple[int, ...]]],
+                      beta: Sequence[float]) -> Optional[Dict[str, Any]]:
+    k = len(names)
+    beta = np.asarray(beta, float)
+    b = beta[1:1 + k]
+    B = np.zeros((k, k))
+    for (label, idx), coef in zip(terms, beta):
+        if len(idx) == 2:
+            i, j = idx
+            if i == j:
+                B[i, i] = coef
+            else:
+                B[i, j] = B[j, i] = coef / 2.0
+    if abs(np.linalg.det(B)) <= 1e-12 * max(1.0, float(np.max(np.abs(B))) ** k):
+        return None
+    xs = -0.5 * np.linalg.solve(B, b)
+    eig = np.linalg.eigvalsh(B)
+    nature = "maximum" if np.all(eig < 0) else "minimum" if np.all(eig > 0) else "saddle"
+    ys = float((_rsm_matrix(xs[None, :], terms) @ beta)[0])
+    return {"point": {nm: float(v) for nm, v in zip(names, xs)}, "predicted_response": ys,
+            "nature": nature, "eigenvalues": [float(e) for e in eig]}
+
+
+def slice_response_surface(model: Mapping[str, Any], keep: Sequence[str], fixed: Mapping[str, float]) -> Dict[str, Any]:
+    """Exact quadratic model in the ``keep`` factors with every other factor held at ``fixed``."""
+    names = list(model["factors"])
+    keep = list(keep)
+    if len(set(keep)) != len(keep) or any(k not in names for k in keep):
+        raise ValueError(f"keep must be distinct factors among {names}")
+    others = [n for n in names if n not in keep]
+    missing = [n for n in others if n not in fixed]
+    if missing:
+        raise ValueError(f"fixed values required for {missing}")
+    coef = model["coefficients"]
+
+    def c(label: str) -> float:
+        return float(coef.get(label, 0.0))
+
+    def inter(a: str, b: str) -> float:
+        return c(f"{a}*{b}") if f"{a}*{b}" in coef else c(f"{b}*{a}")
+
+    v = {n: float(fixed[n]) for n in others}
+    new_terms = _rsm_terms(keep)
+    vals: Dict[str, float] = {}
+    b0 = c("1") + sum(c(n) * v[n] + c(f"{n}^2") * v[n] ** 2 for n in others)
+    b0 += sum(inter(a, b) * v[a] * v[b] for a, b in itertools.combinations(others, 2))
+    vals["1"] = b0
+    for kf in keep:
+        vals[kf] = c(kf) + sum(inter(kf, n) * v[n] for n in others)
+        vals[f"{kf}^2"] = c(f"{kf}^2")
+    for a, b in itertools.combinations(keep, 2):
+        vals[f"{a}*{b}"] = inter(a, b)
+    beta = [vals[t] for t, _ in new_terms]
+    return {**{k: model[k] for k in ("r2", "r2_adj") if k in model}, "factors": keep,
+            "terms": [t for t, _ in new_terms], "coefficients": {t: vals[t] for t, _ in new_terms},
+            "fixed": v, "stationary_point": _stationary_point(keep, new_terms, beta)}
 
 
 def rsm_predict(model: Mapping[str, Any], X: Union[np.ndarray, Sequence[Sequence[float]]]) -> np.ndarray:
@@ -328,14 +405,25 @@ class StatisticalRouter:
             if len(holders) >= 3 and all(_arr(v).size >= 2 for v in holders.values()):
                 out.append(self.compare_multi(holders, metric))
             if design:
-                names = list(design["factor_names"])
-                X, y = [], []
-                for m, vals in holders.items():
-                    for v in _arr(vals):
-                        X.append(design["points"][m])
+                out += self.analyze_rsm(samples, [metric], design)
+        return json.loads(json.dumps(out, allow_nan=False))
+
+    def analyze_rsm(self, samples: Mapping[str, Mapping[str, Sequence[float]]], metrics: Sequence[str],
+                    design: Mapping[str, Any]) -> List[Dict[str, Any]]:
+        """Second-order response-surface fit per metric over the design runs only."""
+        names = list(design["factor_names"])
+        out: List[Dict[str, Any]] = []
+        for metric in metrics:
+            X, y = [], []
+            for m, point in design["points"].items():
+                if m in samples and metric in samples[m]:
+                    for v in _arr(samples[m][metric]):
+                        X.append(point)
                         y.append(v)
-                rsm = fit_response_surface(np.asarray(X, float), y, names)
-                out.append({**rsm, "metric": metric, "comparison": "response_surface"})
+            if not y:
+                continue
+            rsm = fit_response_surface(np.asarray(X, float), y, names)
+            out.append({**rsm, "metric": metric, "comparison": "response_surface"})
         return json.loads(json.dumps(out, allow_nan=False))
 
     def analyze_results_dir(self, profile_dir: Union[str, Path], metrics: Sequence[str], proposed: str,
@@ -359,7 +447,8 @@ def load_raw_samples(npz_path: Union[str, Path]) -> Tuple[Dict[str, Dict[str, Li
                 method, metric = key[len("metric__"):].rsplit("__", 1)
                 samples.setdefault(method, {})[metric] = [float(v) for v in z[key]]
         if "design_matrix" in z.files:
-            labels = [str(s) for s in z["config_labels"]]
+            key = "design_labels" if "design_labels" in z.files else "config_labels"
+            labels = [str(s) for s in z[key]]
             design = {"factor_names": [str(s) for s in z["factor_names"]],
                       "points": {lab: [float(v) for v in row] for lab, row in zip(labels, z["design_matrix"])}}
     return samples, design

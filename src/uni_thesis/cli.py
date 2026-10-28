@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from pydantic import ValidationError
@@ -45,11 +46,68 @@ def _cmd_build_tex(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_profile(path: str) -> Optional[TopicProfile]:
+    try:
+        return TopicProfile.from_yaml(path)
+    except (ValidationError, ValueError, OSError) as exc:
+        print(f"INVALID PROFILE: {exc}", file=sys.stderr)
+        return None
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    from .pipeline import run_profile
+
+    if _load_profile(args.profile) is None:
+        return 1
+    try:
+        result = run_profile(args.profile, results_dir=args.results_dir, template_dir=args.template_dir,
+                             offline=True if args.offline else None, plugin_dir=args.plugins,
+                             mirror_generated=not args.no_mirror)
+    except (ValidationError, IntegrityError, ValueError, KeyError, OSError, RuntimeError) as exc:
+        print(f"RUN FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({"status": "ok" if result.passed else "audit_failed", "profile_id": result.profile_id,
+                      "verified_references": sum(r.verified for r in result.records),
+                      "figures": [f["png"] for f in result.figures],
+                      "auto_metrics": result.tex["auto_metrics"], "auto_tables": result.tex["auto_tables"],
+                      "manifest": str(result.manifest_path),
+                      "timings_s": {k: round(v, 2) for k, v in result.timings_s.items()}}, indent=2))
+    if not result.passed:
+        print(result.audit.format(), file=sys.stderr)
+    return 0 if result.passed else 1
+
+
+def _cmd_pdf(args: argparse.Namespace) -> int:
+    from .pipeline import build_pdf
+
+    profile = _load_profile(args.profile)
+    if profile is None:
+        return 1
+    try:
+        pdf = build_pdf(profile, results_dir=args.results_dir, engine=args.engine)
+    except (OSError, RuntimeError) as exc:
+        print(f"PDF FAILED: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({"status": "ok", "pdf": str(pdf)}))
+    return 0
+
+
 def _cmd_audit(args: argparse.Namespace) -> int:
     from .audit import run_anti_hallucination_audit
+    from .pipeline import ProfilePaths
 
-    report = run_anti_hallucination_audit(args.tex_dir, args.bib, args.metrics, args.lit_cache,
-                                          strict_integers=args.strict_integers)
+    if args.profile:
+        profile = _load_profile(args.profile)
+        if profile is None:
+            return 1
+        paths = ProfilePaths(Path(args.results_dir), profile.profile_id)
+        tex_dir, bib, metrics, cache = paths.thesis, paths.bib, paths.metrics, paths.lit_cache
+    elif args.tex_dir and args.bib and args.metrics:
+        tex_dir, bib, metrics, cache = args.tex_dir, args.bib, args.metrics, args.lit_cache
+    else:
+        print("audit requires --profile, or --tex-dir, --bib and --metrics", file=sys.stderr)
+        return 2
+    report = run_anti_hallucination_audit(tex_dir, bib, metrics, cache, strict_integers=args.strict_integers)
     print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False) if args.json else report.format())
     return 0 if report.passed else 1
 
@@ -73,10 +131,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_tex.add_argument("--proposed", default=None)
     p_tex.set_defaults(func=_cmd_build_tex)
 
+    p_run = sub.add_parser("run", help="Literature -> experiments -> statistics -> figures -> LaTeX -> audit")
+    p_run.add_argument("--profile", required=True)
+    p_run.add_argument("--results-dir", default="results")
+    p_run.add_argument("--template-dir", default="templates/thesis_tex")
+    p_run.add_argument("--plugins", default=None, help="plugin directory (default: ./plugins if present)")
+    p_run.add_argument("--offline", action="store_true", help="skip OpenAlex/Crossref; use signed caches only")
+    p_run.add_argument("--no-mirror", action="store_true",
+                       help="do not mirror generated .tex files into <template-dir>/generated")
+    p_run.set_defaults(func=_cmd_run)
+
+    p_pdf = sub.add_parser("pdf", help="Compile results/<profile_id>/thesis.pdf with pdflatex/xelatex + bibtex")
+    p_pdf.add_argument("--profile", required=True)
+    p_pdf.add_argument("--results-dir", default="results")
+    p_pdf.add_argument("--engine", default=None, choices=["pdflatex", "xelatex", "lualatex"])
+    p_pdf.set_defaults(func=_cmd_pdf)
+
     p_audit = sub.add_parser("audit", help="Run the anti-hallucination audit (raw numbers, citations, provenance)")
-    p_audit.add_argument("--tex-dir", required=True)
-    p_audit.add_argument("--bib", required=True)
-    p_audit.add_argument("--metrics", required=True)
+    p_audit.add_argument("--profile", default=None, help="audit results/<profile_id>/thesis")
+    p_audit.add_argument("--results-dir", default="results")
+    p_audit.add_argument("--tex-dir", default=None)
+    p_audit.add_argument("--bib", default=None)
+    p_audit.add_argument("--metrics", default=None)
     p_audit.add_argument("--lit-cache", default=None)
     p_audit.add_argument("--json", action="store_true")
     p_audit.add_argument("--strict-integers", action="store_true",

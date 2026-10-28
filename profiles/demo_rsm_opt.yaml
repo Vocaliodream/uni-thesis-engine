@@ -1,0 +1,38 @@
+# 多因子工艺参数响应面优化（RSM）与核心模块消融研究
+# Demo topic B: three-factor central composite design + four-stage incremental ablation.
+profile_id: demo_rsm_opt
+title: Response Surface Optimisation of Multi-Factor Process Parameters with Core-Module Ablation
+domain_type: parameter_optimization
+literature_query:
+  keywords: [response surface methodology, central composite design, optimum conditions, process optimization]
+  start_year: 1950
+  max_papers: 8
+data_config:
+  factor_ranges:
+    temperature_c: {low: 60, high: 100}
+    time_min: {low: 10, high: 50}
+    ratio: {low: 1, high: 5}
+  simulator:
+    name: modular_response_surface
+    params:
+      metric_name: yield_pct
+      # y = b0 + sum b_i x_i + sum b_ii x_i^2 + sum b_ij x_i x_j + enabled module gains + noise
+      intercept: -90.1
+      linear: {temperature_c: 3.4, time_min: 0.64, ratio: 9.6}
+      quadratic: {temperature_c: -0.02, time_min: -0.01, ratio: -1.5}
+      interaction: {"temperature_c*time_min": 0.002}
+      contributions: {pretreatment: 3.0, catalyst: 5.0, annealing: 2.0}
+      module_interactions: {"catalyst*annealing": 1.0}
+      noise_std: 0.8
+design:
+  kind: ccd
+  center_points: 3
+ablation:
+  modules: [pretreatment, catalyst, annealing]
+  mode: incremental
+baselines: [baseline]
+proposed_method: full
+metrics_target: [yield_pct]
+metrics_direction: {yield_pct: max}
+random_seed: 7
+n_repeats: 3

@@ -105,7 +105,7 @@ def test_generate_tex_artifacts_ablation(ablation_run, tmp_path):
         assert cmd in tables
     assert r"$\mathbf{\MetricFullAccuracyMean \pm \MetricFullAccuracyStd}$" in tables
     second = sorted(((m["accuracy"].mean, k) for k, m in bundle.methods_metrics.items()), reverse=True)[1][1]
-    assert rf"\underline{{$\Metric{tb.macro_name(second, 'accuracy')}Mean" in tables
+    assert rf"\underline{{${{\Metric{tb.macro_name(second, 'accuracy')}Mean" in tables
     assert r"^{\text{***}}" in tables
     assert "tab:auto-comparison" not in tables  # every method belongs to the ablation
 

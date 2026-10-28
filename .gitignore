@@ -11,3 +11,6 @@ dist/
 # experiment outputs: keep the folder, ignore generated content
 results/*
 !results/.gitkeep
+
+# per-run LaTeX artefacts mirrored from the last `uni-thesis run`
+templates/thesis_tex/generated/

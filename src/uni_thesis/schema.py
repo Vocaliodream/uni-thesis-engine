@@ -139,10 +139,12 @@ class ExperimentDesign(_StrictModel):
 
 
 class AblationConfig(_StrictModel):
-    """Component-removal ablation: Full vs. w/o each module vs. Baseline."""
+    """Component ablation.  ``removal``: Full vs. w/o each module vs. Baseline;
+    ``incremental``: Baseline, +m1, +m1+m2, ..., Full (cumulative stages)."""
 
     modules: List[StrictStr] = Field(min_length=1)
     include_baseline: StrictBool = True
+    mode: Literal["removal", "incremental"] = "removal"
 
     @field_validator("modules")
     @classmethod

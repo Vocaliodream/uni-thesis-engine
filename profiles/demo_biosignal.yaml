@@ -1,0 +1,47 @@
+# 可穿戴多模态生理信号（ECG/PPG）零相位滤波与特征提取研究
+# Demo topic A: wearable multi-modal (ECG + PPG) zero-phase filtering benchmark.
+profile_id: demo_biosignal
+title: Zero-Phase Filtering and Feature Extraction for Wearable Multi-Modal ECG/PPG Signals
+domain_type: signal_processing
+literature_query:
+  keywords: [ECG, photoplethysmography, zero-phase filtering, signal denoising, smoothing, QRS detection]
+  start_year: 1960
+  max_papers: 8
+data_config:
+  sampling_rate_hz: 250
+  simulator:
+    name: multichannel
+    params:
+      channels:
+        ecg:
+          simulator: ecg            # McSharry et al. 2003 Gaussian-kernel PQRST model
+          params:
+            duration_s: 10.0
+            heart_rate_bpm: 72
+            rr_std_s: 0.03
+            noise_std: 0.06
+            baseline_wander_amp: 0.35
+            baseline_wander_hz: 0.25
+            powerline_amp: 0.12
+            powerline_hz: 50.0
+        ppg:
+          simulator: ppg            # systolic + dicrotic Gaussian kernels (phase_rad, amplitude, width_rad)
+          params:
+            duration_s: 10.0
+            heart_rate_bpm: 72
+            rr_std_s: 0.03
+            waves: [[-1.2, 1.0, 0.45], [0.6, 0.4, 0.5]]
+            noise_std: 0.05
+            baseline_wander_amp: 0.30
+            baseline_wander_hz: 0.20
+            powerline_amp: 0.08
+            powerline_hz: 50.0
+baselines: [moving_average, savitzky_golay, butterworth_zero_phase]
+proposed_method: butterworth_zero_phase
+metrics_target: [delta_snr_db, rmse, pearson_r, ba_loa_width]
+random_seed: 20240601
+n_repeats: 20
+method_params:
+  moving_average: {window_s: 0.02}
+  savitzky_golay: {window_s: 0.05, polyorder: 3}
+  butterworth_zero_phase: {order: 4, low_hz: 0.5, high_hz: 40.0}

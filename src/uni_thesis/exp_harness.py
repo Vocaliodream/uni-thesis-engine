@@ -7,8 +7,12 @@ Two domain-agnostic pipelines are registered out of the box:
   power-line interference and white noise) comparing registered filters on
   delta-SNR, RMSE, Pearson r and phase delay.
 * ``parameter_optimization`` / ``ablation_study`` - multi-factor grid / central
-  composite design evaluation and module-removal ablation over a registered
-  objective (built-in analytic objectives or user plugins).
+  composite design evaluation and module-removal or incremental ablation over a
+  registered objective (built-in analytic objectives or user plugins); a
+  parameter-optimization profile may also carry an ablation evaluated at the
+  design centre in the same run.
+* Signal simulators may emit several synchronous channels (``multichannel``),
+  e.g. multi-modal wearable recordings.
 
 Every number written to ``results/<profile_id>/metrics.json`` is produced by an
 actual run and stamped with the git commit and the SHA-256 of the input data.
@@ -52,6 +56,7 @@ __all__ = [
     "rmse",
     "pearson_r",
     "phase_delay_ms",
+    "bland_altman_stats",
     "summarize",
     "build_design",
     "git_commit_hash",
@@ -140,35 +145,34 @@ def _filter_savgol(x: np.ndarray, fs: float, params: Mapping[str, Any]) -> np.nd
     return sps.savgol_filter(x, n, order, mode="interp")
 
 
-def _butter_ba(fs: float, params: Mapping[str, Any]) -> Tuple[np.ndarray, np.ndarray]:
+def _butter_sos(fs: float, params: Mapping[str, Any]) -> np.ndarray:
+    """Second-order sections (numerically stable for high orders / low cut-offs)."""
     _require(params, ["order"], "butterworth")
     low, high = params.get("low_hz"), params.get("high_hz")
     nyq = fs / 2.0
     if low is not None and high is not None:
         if not 0 < float(low) < float(high) < nyq:
             raise ValueError("butterworth requires 0 < low_hz < high_hz < fs/2")
-        return sps.butter(int(params["order"]), [float(low), float(high)], btype="bandpass", fs=fs)
+        return sps.butter(int(params["order"]), [float(low), float(high)], btype="bandpass", fs=fs, output="sos")
     if high is not None:
         if not 0 < float(high) < nyq:
             raise ValueError("butterworth requires 0 < high_hz < fs/2")
-        return sps.butter(int(params["order"]), float(high), btype="lowpass", fs=fs)
+        return sps.butter(int(params["order"]), float(high), btype="lowpass", fs=fs, output="sos")
     if low is not None:
         if not 0 < float(low) < nyq:
             raise ValueError("butterworth requires 0 < low_hz < fs/2")
-        return sps.butter(int(params["order"]), float(low), btype="highpass", fs=fs)
+        return sps.butter(int(params["order"]), float(low), btype="highpass", fs=fs, output="sos")
     raise ValueError("butterworth requires low_hz and/or high_hz")
 
 
 @register_filter("butterworth_zero_phase")
 def _filter_butter_zero_phase(x: np.ndarray, fs: float, params: Mapping[str, Any]) -> np.ndarray:
-    b, a = _butter_ba(fs, params)
-    return sps.filtfilt(b, a, x)
+    return sps.sosfiltfilt(_butter_sos(fs, params), x)
 
 
 @register_filter("butterworth_causal")
 def _filter_butter_causal(x: np.ndarray, fs: float, params: Mapping[str, Any]) -> np.ndarray:
-    b, a = _butter_ba(fs, params)
-    return sps.lfilter(b, a, x)
+    return sps.sosfilt(_butter_sos(fs, params), x)
 
 
 # --------------------------------------------------------------------------- #
@@ -252,6 +256,28 @@ def _sim_tof(params: Mapping[str, Any], fs: float, rng: np.random.Generator):
     return t, clean, _add_interference(clean, t, params, rng)
 
 
+@register_signal_simulator("multichannel")
+def _sim_multichannel(params: Mapping[str, Any], fs: float, rng: np.random.Generator):
+    """Synchronous multi-modal recording: ``params["channels"]`` maps a channel name to
+    ``{"simulator": <registered name>, "params": {...}}``; returns (t, clean[C, N], noisy[C, N])."""
+    _require(params, ["channels"], "multichannel simulator")
+    chans = params["channels"]
+    if not isinstance(chans, Mapping) or not chans:
+        raise ValueError("multichannel simulator requires a non-empty 'channels' mapping")
+    cleans, noisys, t_ref = [], [], None
+    for name, spec in chans.items():
+        sim_name = spec.get("simulator") if isinstance(spec, Mapping) else None
+        if sim_name not in SIGNAL_SIMULATOR_REGISTRY or sim_name == "multichannel":
+            raise KeyError(f"channel '{name}': unregistered or invalid simulator '{sim_name}'")
+        t, c, n = SIGNAL_SIMULATOR_REGISTRY[sim_name](spec.get("params", {}), fs, rng)
+        if t_ref is not None and len(t) != len(t_ref):
+            raise ValueError("all channels must share the same duration_s")
+        t_ref = t
+        cleans.append(np.asarray(c, float))
+        noisys.append(np.asarray(n, float))
+    return t_ref, np.vstack(cleans), np.vstack(noisys)
+
+
 # --------------------------------------------------------------------------- #
 # Built-in generic objectives
 # --------------------------------------------------------------------------- #
@@ -289,6 +315,23 @@ def _obj_module_contrib(config: Mapping[str, Any], params: Mapping[str, Any], rn
             y += float(c)
     y += float(params["noise_std"]) * rng.standard_normal()
     return {str(params.get("metric_name", "score")): y}
+
+
+@register_objective("modular_response_surface")
+def _obj_modular_response_surface(config: Mapping[str, Any], params: Mapping[str, Any],
+                                  rng: np.random.Generator) -> Dict[str, float]:
+    """Quadratic factor response plus the contributions of enabled modules (all modules are
+    enabled unless ``config["modules"]`` disables them): couples a process-parameter study with
+    a component ablation evaluated on the same objective."""
+    _require(params, ["intercept", "noise_std", "contributions"], "modular_response_surface")
+    rsm = {k: params[k] for k in ("intercept", "linear", "quadratic", "interaction") if k in params}
+    y = _obj_response_surface(config, {**rsm, "noise_std": 0.0, "metric_name": "y"}, rng)["y"]
+    on = config.get("modules") or {m: True for m in params["contributions"]}
+    modules = _obj_module_contrib({"modules": on}, {"base_value": 0.0, "contributions": params["contributions"],
+                                                    "interactions": params.get("module_interactions", {}),
+                                                    "noise_std": 0.0, "metric_name": "y"}, rng)["y"]
+    y += modules + float(params["noise_std"]) * rng.standard_normal()
+    return {str(params.get("metric_name", "response")): y}
 
 
 # --------------------------------------------------------------------------- #
@@ -457,8 +500,23 @@ class BasePipeline:
         self.profile = profile
 
 
-_SIGNAL_UNITS = {"delta_snr_db": "dB", "rmse": "signal units", "pearson_r": "", "phase_delay_ms": "ms", "runtime_s": "s"}
-_SIGNAL_DIRECTIONS = {"delta_snr_db": "max", "rmse": "min", "pearson_r": "max", "phase_delay_ms": "min_abs", "runtime_s": "min"}
+_SIGNAL_UNITS = {"delta_snr_db": "dB", "rmse": "signal units", "pearson_r": "", "phase_delay_ms": "ms",
+                 "ba_bias": "signal units", "ba_loa_width": "signal units", "runtime_s": "s"}
+_SIGNAL_DIRECTIONS = {"delta_snr_db": "max", "rmse": "min", "pearson_r": "max", "phase_delay_ms": "min_abs",
+                      "ba_bias": "min_abs", "ba_loa_width": "min", "runtime_s": "min"}
+
+
+def bland_altman_stats(reference: np.ndarray, measured: np.ndarray) -> Tuple[float, float]:
+    """(bias, width of the 95 % limits of agreement = 2 * 1.96 * SD of the differences)."""
+    d = np.asarray(measured, float) - np.asarray(reference, float)
+    return float(d.mean()), float(2 * 1.96 * d.std(ddof=1))
+
+
+def _signal_metrics(clean: np.ndarray, noisy: np.ndarray, y: np.ndarray, fs: float) -> Dict[str, float]:
+    bias, loa = bland_altman_stats(clean, y)
+    return {"delta_snr_db": snr_db(clean, y) - snr_db(clean, noisy), "rmse": rmse(clean, y),
+            "pearson_r": pearson_r(clean, y), "phase_delay_ms": phase_delay_ms(clean, y, fs),
+            "ba_bias": bias, "ba_loa_width": loa}
 
 
 @register_pipeline("signal_processing")
@@ -492,10 +550,14 @@ class SignalProcessingPipeline(BasePipeline):
         raise ValueError(f"unsupported input format '{suffix}'")
 
     def execute(self) -> PipelineOutput:
+        """Each method filters every channel; per repeat, a metric is recorded per
+        channel (``<metric>_<channel>``) and as the channel average (``<metric>``)."""
         p = self.profile
         fs = float(p.data_config.sampling_rate_hz)
         methods = self._methods()
-        raw: Dict[str, Dict[str, List[float]]] = {m: {k: [] for k in _SIGNAL_UNITS} for m in methods}
+        raw: Dict[str, Dict[str, List[float]]] = {m: {} for m in methods}
+        units = dict(_SIGNAL_UNITS)
+        directions = dict(_SIGNAL_DIRECTIONS)
         hash_chunks: List[bytes] = []
         arrays: Dict[str, np.ndarray] = {}
         external = None
@@ -504,6 +566,7 @@ class SignalProcessingPipeline(BasePipeline):
             external = (clean_e, noisy_e)
             hash_chunks.append(blob)
         sim = p.data_config.simulator
+        channels: List[str] = []
         for r in range(p.n_repeats):
             if external is not None:
                 clean, noisy = external
@@ -514,23 +577,42 @@ class SignalProcessingPipeline(BasePipeline):
                 rng = np.random.default_rng([p.random_seed, r])
                 t, clean, noisy = SIGNAL_SIMULATOR_REGISTRY[sim.name](sim.params, fs, rng)
                 hash_chunks += [np.ascontiguousarray(clean).tobytes(), np.ascontiguousarray(noisy).tobytes()]
-            snr_in = snr_db(clean, noisy)
+            clean2, noisy2 = np.atleast_2d(np.asarray(clean, float)), np.atleast_2d(np.asarray(noisy, float))
+            multi = clean2.shape[0] > 1
+            if not channels:
+                channels = (list(sim.params["channels"]) if multi and sim is not None and "channels" in sim.params
+                            else [f"ch{i}" for i in range(clean2.shape[0])])
             if r == 0:
-                arrays.update({"t": t, "clean": clean, "noisy": noisy})
+                arrays["t"] = t
+                if multi:
+                    arrays["channel_names"] = np.array(channels)
+                    for ci, ch in enumerate(channels):
+                        arrays[f"clean__{ch}"], arrays[f"noisy__{ch}"] = clean2[ci], noisy2[ci]
+                arrays.update({"clean": clean2[0], "noisy": noisy2[0]})
             for m in methods:
+                per_channel: List[Dict[str, float]] = []
                 t0 = time.perf_counter()
-                y = np.asarray(FILTER_REGISTRY[m](noisy, fs, p.method_params.get(m, {})), float)
+                outs = [np.asarray(FILTER_REGISTRY[m](noisy2[ci], fs, p.method_params.get(m, {})), float)
+                        for ci in range(clean2.shape[0])]
                 elapsed = time.perf_counter() - t0
-                if y.shape != clean.shape or not np.all(np.isfinite(y)):
-                    raise ValueError(f"filter '{m}' produced invalid output")
-                raw[m]["delta_snr_db"].append(snr_db(clean, y) - snr_in)
-                raw[m]["rmse"].append(rmse(clean, y))
-                raw[m]["pearson_r"].append(pearson_r(clean, y))
-                raw[m]["phase_delay_ms"].append(phase_delay_ms(clean, y, fs))
-                raw[m]["runtime_s"].append(elapsed)
-                if r == 0:
-                    arrays[f"out__{m}"] = y
-        return PipelineOutput(raw, dict(_SIGNAL_UNITS), dict(_SIGNAL_DIRECTIONS), _sha256_bytes(hash_chunks), arrays)
+                for ci, y in enumerate(outs):
+                    if y.shape != clean2[ci].shape or not np.all(np.isfinite(y)):
+                        raise ValueError(f"filter '{m}' produced invalid output")
+                    per_channel.append(_signal_metrics(clean2[ci], noisy2[ci], y, fs))
+                    if r == 0:
+                        if multi:
+                            arrays[f"out__{m}__{channels[ci]}"] = y
+                        if ci == 0:
+                            arrays[f"out__{m}"] = y
+                for k in per_channel[0]:
+                    raw[m].setdefault(k, []).append(float(np.mean([pc[k] for pc in per_channel])))
+                    if multi:
+                        for ch, pc in zip(channels, per_channel):
+                            key = f"{k}_{ch}"
+                            raw[m].setdefault(key, []).append(pc[k])
+                            units[key], directions[key] = units[k], directions[k]
+                raw[m].setdefault("runtime_s", []).append(elapsed)
+        return PipelineOutput(raw, units, directions, _sha256_bytes(hash_chunks), arrays)
 
 
 class MultiFactorPipeline(BasePipeline):
@@ -539,24 +621,51 @@ class MultiFactorPipeline(BasePipeline):
     def configurations(self) -> List[Tuple[str, Dict[str, Any]]]:
         p = self.profile
         if p.domain_type == "ablation_study":
-            modules = p.ablation.modules
-            centers = {}
-            if p.data_config.factor_ranges:
-                centers = build_design(p.data_config.factor_ranges, ExperimentDesign(kind="ccd", center_points=1))[-1]
-            configs = [("full", {"modules": {m: True for m in modules}, "factors": centers})]
-            for m in modules:
-                configs.append((f"w/o {m}", {"modules": {x: x != m for x in modules}, "factors": centers}))
-            if p.ablation.include_baseline:
-                configs.append(("baseline", {"modules": {m: False for m in modules}, "factors": centers}))
-            return configs
+            return self.ablation_configurations()
         points = build_design(p.data_config.factor_ranges, p.design)
         configs, seen = [], {}
+        all_on = {m: True for m in p.ablation.modules} if p.ablation else None
         for pt in points:
             label = ",".join(f"{k}={v:.6g}" for k, v in pt.items())
             seen[label] = seen.get(label, 0) + 1
             if seen[label] > 1:
                 label = f"{label}#{seen[label]}"
-            configs.append((label, {"factors": pt}))
+            cfg: Dict[str, Any] = {"factors": pt}
+            if all_on is not None:
+                cfg["modules"] = dict(all_on)
+            configs.append((label, cfg))
+        if p.ablation is not None:
+            configs += self.ablation_configurations()
+        return configs
+
+    @property
+    def design_labels(self) -> List[str]:
+        """Labels of the factor-design runs (excludes ablation configurations)."""
+        if self.profile.domain_type == "ablation_study":
+            return []
+        abl = {lab for lab, _ in self.ablation_configurations()} if self.profile.ablation else set()
+        return [lab for lab, _ in self.configurations() if lab not in abl]
+
+    def ablation_configurations(self) -> List[Tuple[str, Dict[str, Any]]]:
+        """Removal mode: full, w/o each module, baseline.  Incremental mode:
+        baseline, +m1, +m1+m2, ..., full.  Run at the design centre when factors exist."""
+        p = self.profile
+        modules = p.ablation.modules
+        centers: Dict[str, float] = {}
+        if p.data_config.factor_ranges:
+            centers = build_design(p.data_config.factor_ranges, ExperimentDesign(kind="ccd", center_points=1))[-1]
+        if p.ablation.mode == "incremental":
+            configs = [("baseline", {"modules": {m: False for m in modules}, "factors": centers})]
+            for i in range(1, len(modules)):
+                on = modules[:i]
+                configs.append(("+" + " +".join(on), {"modules": {m: m in on for m in modules}, "factors": centers}))
+            configs.append(("full", {"modules": {m: True for m in modules}, "factors": centers}))
+            return configs
+        configs = [("full", {"modules": {m: True for m in modules}, "factors": centers})]
+        for m in modules:
+            configs.append((f"w/o {m}", {"modules": {x: x != m for x in modules}, "factors": centers}))
+        if p.ablation.include_baseline:
+            configs.append(("baseline", {"modules": {m: False for m in modules}, "factors": centers}))
         return configs
 
     def execute(self) -> PipelineOutput:
@@ -593,7 +702,10 @@ class MultiFactorPipeline(BasePipeline):
         arrays: Dict[str, np.ndarray] = {"config_labels": np.array([c[0] for c in configs])}
         if p.data_config.factor_ranges and p.domain_type != "ablation_study":
             names = list(p.data_config.factor_ranges)
-            arrays["design_matrix"] = np.array([[c[1]["factors"][n] for n in names] for c in configs], float)
+            dlabels = set(self.design_labels)
+            dconf = [c for c in configs if c[0] in dlabels]
+            arrays["design_matrix"] = np.array([[c[1]["factors"][n] for n in names] for c in dconf], float)
+            arrays["design_labels"] = np.array([c[0] for c in dconf])
             arrays["factor_names"] = np.array(names)
         units = {k: "" for k in (metric_keys or [])}
         units["runtime_s"] = "s"
@@ -657,15 +769,22 @@ class ExperimentHarness:
         design = None
         if "design_matrix" in out.arrays:
             names = [str(n) for n in out.arrays["factor_names"]]
-            labels = [str(l) for l in out.arrays["config_labels"]]
+            labels = [str(l) for l in out.arrays["design_labels"]]
             design = {"factor_names": names,
                       "points": {lab: [float(v) for v in row] for lab, row in zip(labels, out.arrays["design_matrix"])}}
-        tests = StatisticalRouter(self.alpha).analyze(out.raw, p.metrics_target, proposed,
-                                                      paired=(p.domain_type == "signal_processing"), design=design)
+        router = StatisticalRouter(self.alpha)
+        paired = p.domain_type == "signal_processing"
+        if design is not None and p.ablation is not None:
+            abl = {m: v for m, v in out.raw.items() if m not in design["points"]}
+            tests = router.analyze(abl, p.metrics_target, proposed, paired=paired)
+            tests += router.analyze_rsm(out.raw, p.metrics_target, design)
+        else:
+            tests = router.analyze(out.raw, p.metrics_target, proposed, paired=paired, design=design)
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         npz_path = self.output_dir / "raw_series.npz"
         arrays = dict(out.arrays)
+        arrays["method_order"] = np.array(list(out.raw))
         for method, metrics in out.raw.items():
             for name, vals in metrics.items():
                 arrays[f"metric__{method}__{name}"] = np.asarray(vals, float)

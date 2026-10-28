@@ -1,0 +1,58 @@
+% =====================================================================
+% uni-thesis-engine -- modular, topic-agnostic thesis template.
+% Compiles with pdflatex or xelatex using only standard TeX Live fonts.
+% Every result figure, number and citation is injected from generated/:
+%   generated/auto_metrics.tex     result macros (\Metric..., \Stat..., \Diff...) + flags
+%   generated/auto_tables.tex      booktabs three-line tables
+%   generated/auto_figures.tex     fig_foundry vector figures
+%   generated/auto_literature.tex  DOI-verified related work
+% Never type an experimental number into chapters/ -- the audit will reject it.
+% =====================================================================
+\documentclass[11pt,a4paper,oneside]{report}
+
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{lmodern}
+\else
+  \usepackage{fontspec}
+\fi
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[round,authoryear]{natbib}
+\usepackage[hidelinks]{hyperref}
+
+\input{generated/auto_metrics.tex}
+
+\title{\ThesisTitle}
+\author{Author Name\\ \small Supervisor: Supervisor Name}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This thesis investigates \ThesisTitle. A reproducible pipeline retrieves and DOI-verifies the
+related literature, executes every experiment from a declarative topic profile, routes each
+comparison to the statistical test its assumptions allow, and injects all reported values into
+this document through auto-generated macros. On the primary metric (\MetricPrimaryName), the
+proposed configuration (\MetricPrimaryProposedName) reaches \MetricPrimaryProposedMean{} $\pm$
+\MetricPrimaryProposedStd{} \MetricPrimaryUnit, compared with \MetricPrimaryRunnerUpMean{} for the
+strongest alternative (\MetricPrimaryRunnerUpName; $p$ \StatPrimaryPval, \StatPrimaryTest).
+\end{abstract}
+
+\tableofcontents
+
+\input{chapters/chap1_intro}
+\input{chapters/chap2_related}
+\input{chapters/chap3_method}
+\input{chapters/chap4_experiments}
+\input{chapters/chap5_conclusion}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

@@ -30,11 +30,17 @@ __all__ = [
     "macro_name",
     "format_number",
     "format_p_value",
+    "format_p_relation",
     "file_sha256",
     "build_macros",
     "render_macros",
     "render_tables",
     "generate_tex_artifacts",
+    "method_groups",
+    "rsm_equation",
+    "render_flags",
+    "render_figures",
+    "render_literature",
     "SHA_HEADER_KEY",
 ]
 
@@ -103,6 +109,12 @@ def format_p_value(p: float) -> str:
     if p < 0.001:
         return r"\ensuremath{< 0.001}"
     return f"{p:#.3g}" if p < 1 else "1"
+
+
+def format_p_relation(p: float) -> str:
+    """``= 0.0123`` or ``< 0.001``, to follow an italic $p$ in running text."""
+    p = float(p)
+    return r"\ensuremath{< 0.001}" if p < 0.001 else f"\\ensuremath{{= {format_p_value(p)}}}"
 
 
 def file_sha256(path: PathLike) -> str:
@@ -295,8 +307,7 @@ def render_macros(macros: Mapping[str, str], header: str) -> str:
 def _cell(method: str, metric: str, ctx: Mapping[str, Any], best: Optional[str], second: Optional[str]) -> str:
     mean_m, std_m = ctx["cells"][(method, metric)]
     body = f"\\{mean_m} \\pm \\{std_m}"
-    if method == best:
-        body = f"\\mathbf{{{body}}}"
+    body = f"\\mathbf{{{body}}}" if method == best else f"{{{body}}}"
     stars = ctx["stars"].get((method, metric))
     sup = f"^{{\\text{{{stars}}}}}" if stars and stars != "ns" else ""
     cell = f"${body}{sup}$"
@@ -342,35 +353,329 @@ def _table(bundle: ExperimentResultBundle, methods: Sequence[str], metrics: Sequ
     ])
 
 
+def _is_ablation_label(m: str) -> bool:
+    return m in ("full", "baseline") or m.startswith("w/o ") or m.startswith("+")
+
+
+def method_groups(bundle: ExperimentResultBundle, design_labels: Sequence[str] = (),
+                  order: Sequence[str] = ()) -> Dict[str, List[str]]:
+    """Split methods into ``design`` runs, ``ablation`` configurations and the ``comparison`` set,
+    in run order when ``order`` (the harness' ``method_order``) is given."""
+    known = list(bundle.methods_metrics)
+    methods = [m for m in order if m in bundle.methods_metrics] + [m for m in known if m not in set(order)]
+    design_set = set(design_labels)
+    design = [m for m in methods if m in design_set]
+    rest = [m for m in methods if m not in design_set]
+    abl = [m for m in rest if _is_ablation_label(m)]
+    is_abl = "full" in abl and any(m.startswith(("w/o ", "+")) for m in abl)
+    if not is_abl:
+        abl = []
+    elif not order and "baseline" in abl:
+        others = [m for m in abl if m != "baseline"]
+        abl = (["baseline"] + others) if any(m.startswith("+") for m in others) else (others + ["baseline"])
+    comparison = [m for m in rest if m not in abl]
+    return {"design": design, "ablation": abl, "comparison": comparison}
+
+
+def _raw_series_info(bundle: ExperimentResultBundle, raw_series: Optional[PathLike]
+                     ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """(design, method run order) from the run's ``raw_series.npz`` when available."""
+    import numpy as np
+
+    from .stat_router import load_raw_samples
+
+    path = Path(raw_series) if raw_series else (Path(bundle.artifacts_paths["raw_series"])
+                                                  if "raw_series" in bundle.artifacts_paths else None)
+    if path is None or not path.exists():
+        return None, []
+    design = load_raw_samples(path)[1]
+    with np.load(path, allow_pickle=False) as z:
+        order = [str(m) for m in z["method_order"]] if "method_order" in z.files else []
+    return design, order
+
+
+def _signed(v: float, sig: int) -> str:
+    return ("- " if v < 0 else "+ ") + format_number(abs(v), sig)
+
+
+def rsm_equation(test: Mapping[str, Any], sig: int = 4, per_line: int = 4) -> str:
+    """Fitted second-order model as an ``aligned`` block, factors coded ``x_1..x_k``."""
+    names = list(test["factors"])
+    sym = {n: f"x_{{{i + 1}}}" for i, n in enumerate(names)}
+    coef = test["coefficients"]
+    pieces = []
+    for term in test["terms"]:
+        if term == "1":
+            continue
+        if term.endswith("^2"):
+            var = sym[term[:-2]] + "^{2}"
+        elif "*" in term:
+            a, b = term.split("*")
+            var = sym[a] + sym[b]
+        else:
+            var = sym[term]
+        pieces.append(f"{_signed(coef[term], sig)}\\,{var}")
+    b0 = format_number(coef["1"], sig)
+    lines = [" ".join(pieces[i:i + per_line]) for i in range(0, len(pieces), per_line)]
+    body = f"\\hat{{y}} &= {b0} " + (lines[0] if lines else "")
+    for ln in lines[1:]:
+        body += f" \\\\ &\\quad {ln}"
+    return f"\\begin{{aligned}}{body}\\end{{aligned}}"
+
+
+_NA = r"\textit{N/A}"
+
+
+def _role_macros(bundle: ExperimentResultBundle, macros: Dict[str, str], ctx: Mapping[str, Any],
+                 groups: Mapping[str, List[str]], primary: str, title: Optional[str], sig: int) -> Dict[str, bool]:
+    """Profile-agnostic macros for the generic thesis template; absent facts are ``N/A``."""
+    proposed = ctx["proposed"]
+    mm = bundle.methods_metrics
+    group = groups["ablation"] or groups["comparison"]
+    role: Dict[str, str] = {
+        "ThesisTitle": latex_escape(title) if title else latex_escape(bundle.profile_id),
+        "ThesisProfileId": latex_escape(bundle.profile_id),
+        "MetricPrimaryName": latex_escape(primary.replace("_", " ")),
+        "MetricPrimaryUnit": "", "MetricPrimaryProposedName": _NA, "MetricPrimaryProposedMean": _NA,
+        "MetricPrimaryProposedStd": _NA, "MetricPrimaryProposedCiLow": _NA, "MetricPrimaryProposedCiHigh": _NA,
+        "MetricPrimaryRunnerUpName": _NA, "MetricPrimaryRunnerUpMean": _NA, "MetricPrimaryRunnerUpStd": _NA,
+        "DiffPrimaryAbs": _NA, "DiffPrimaryRelPct": _NA,
+        "StatPrimaryPval": _NA, "StatPrimaryTest": _NA, "StatPrimaryStars": _NA, "StatPrimaryEffect": _NA,
+        "StatPrimaryEffectName": _NA, "StatPrimaryN": _NA,
+        "StatPrimaryOmnibusPval": _NA, "StatPrimaryOmnibusTest": _NA,
+        "StatRsmPrimaryRsq": _NA, "StatRsmPrimaryRsqAdj": _NA, "StatRsmPrimaryFvalue": _NA,
+        "StatRsmPrimaryPval": _NA, "StatRsmPrimaryLackOfFitPval": _NA, "StatRsmPrimaryOptResponse": _NA,
+        "StatRsmPrimaryOptNature": _NA, "StatRsmPrimaryOptPoint": _NA, "StatRsmPrimaryEquation": _NA,
+        "StatRsmPrimaryFactorLegend": _NA,
+    }
+    if proposed in mm and primary in mm[proposed]:
+        item = mm[proposed][primary]
+        role.update({"MetricPrimaryProposedName": latex_escape(proposed),
+                     "MetricPrimaryUnit": latex_escape(item.unit),
+                     "MetricPrimaryProposedMean": format_number(item.mean, sig),
+                     "MetricPrimaryProposedStd": format_number(item.std, sig),
+                     "MetricPrimaryProposedCiLow": format_number(item.ci_95[0], sig),
+                     "MetricPrimaryProposedCiHigh": format_number(item.ci_95[1], sig)})
+        others = [m for m in group if m != proposed and primary in mm[m]]
+        direction = _direction(bundle, primary, list(mm)) or "max"
+        if others:
+            key = {"max": lambda m: -mm[m][primary].mean, "min": lambda m: mm[m][primary].mean,
+                   "min_abs": lambda m: abs(mm[m][primary].mean)}[direction]
+            ru = min(others, key=key)
+            r_item = mm[ru][primary]
+            diff = item.mean - r_item.mean
+            role.update({"MetricPrimaryRunnerUpName": latex_escape(ru),
+                         "MetricPrimaryRunnerUpMean": format_number(r_item.mean, sig),
+                         "MetricPrimaryRunnerUpStd": format_number(r_item.std, sig),
+                         "DiffPrimaryAbs": format_number(diff, sig)})
+            if r_item.mean != 0:
+                role["DiffPrimaryRelPct"] = format_number(100.0 * diff / abs(r_item.mean), sig)
+            for t in bundle.statistical_tests:
+                if (t.get("comparison") == "pairwise" and t["metric"] == primary and t["method_a"] == proposed
+                        and t["method_b"] == ru):
+                    role.update({"StatPrimaryPval": format_p_relation(t["p_value"]), "StatPrimaryStars": t["significance"],
+                                 "StatPrimaryTest": latex_escape(_TEST_LABELS.get(t["test"], t["test"])),
+                                 "StatPrimaryN": str(t.get("n_a", ""))})
+                    eff = t.get("effect_size") or {}
+                    if eff.get("value") is not None and eff.get("name") != "none":
+                        role["StatPrimaryEffect"] = format_number(eff["value"], sig)
+                        role["StatPrimaryEffectName"] = latex_escape(str(eff["name"]).replace("_", " "))
+    for t in bundle.statistical_tests:
+        if t.get("comparison") == "multi_group" and t["metric"] == primary:
+            role["StatPrimaryOmnibusPval"] = format_p_relation(t["p_value"])
+            role["StatPrimaryOmnibusTest"] = latex_escape(_TEST_LABELS.get(t["test"], t["test"]))
+        if t.get("comparison") == "response_surface" and t["metric"] == primary:
+            role.update({"StatRsmPrimaryRsq": format_number(t["r2"], sig),
+                         "StatRsmPrimaryRsqAdj": format_number(t["r2_adj"], sig),
+                         "StatRsmPrimaryPval": format_p_relation(t["p_value"]),
+                         "StatRsmPrimaryEquation": rsm_equation(t, sig),
+                         "StatRsmPrimaryFactorLegend": ", ".join(
+                             f"$x_{{{i + 1}}}$ = {latex_escape(n)}" for i, n in enumerate(t["factors"]))})
+            if t.get("f_value") is not None:
+                role["StatRsmPrimaryFvalue"] = format_number(t["f_value"], sig)
+            lof = [r for r in t.get("anova", []) if r["source"] == "Lack of fit"]
+            if lof:
+                role["StatRsmPrimaryLackOfFitPval"] = format_p_relation(lof[0]["p_value"])
+            sp = t.get("stationary_point")
+            if sp:
+                role["StatRsmPrimaryOptResponse"] = format_number(sp["predicted_response"], sig)
+                role["StatRsmPrimaryOptNature"] = sp["nature"]
+                role["StatRsmPrimaryOptPoint"] = ", ".join(
+                    f"{latex_escape(k)} = {format_number(v, sig)}" for k, v in sp["point"].items())
+    for k, v in role.items():
+        if k in macros and macros[k] != v:
+            raise MacroNameCollision(f"role macro \\{k} clashes with a generated result macro")
+        macros[k] = v
+    has_rsm = any(t.get("comparison") == "response_surface" for t in bundle.statistical_tests)
+    return {"AutoHasComparison": len(groups["comparison"]) >= 2, "AutoHasAblation": bool(groups["ablation"]),
+            "AutoHasRsm": has_rsm, "AutoHasDesign": bool(groups["design"])}
+
+
+def _rsm_term_macros(bundle: ExperimentResultBundle, macros: Dict[str, str], sig: int) -> None:
+    for t in bundle.statistical_tests:
+        if t.get("comparison") != "response_surface":
+            continue
+        head = "Stat" + macro_name("Rsm", t["metric"])
+        macros[head + "Equation"] = rsm_equation(t, sig)
+        for row in t.get("anova", []):
+            if row["source"] == "Lack of fit":
+                macros[head + "LackOfFitPval"] = format_p_value(row["p_value"])
+        for term, st in t.get("term_stats", {}).items():
+            name = head + "Term" + ("Intercept" if term == "1" else macro_name(term.replace("^2", " Sq")))
+            macros[name + "Coef"] = format_number(st["coef"], sig)
+            macros[name + "Pval"] = format_p_value(st["p_value"])
+
+
+def render_flags(flags: Mapping[str, bool]) -> str:
+    lines = []
+    for name, on in flags.items():
+        lines.append(f"\\newif\\if{name}")
+        lines.append(f"\\{name}{'true' if on else 'false'}")
+    return "\n".join(lines) + "\n"
+
+
+def _design_table(bundle: ExperimentResultBundle, design: Mapping[str, Any], labels: Sequence[str],
+                  metrics: Sequence[str], ctx: Mapping[str, Any], sig: int) -> str:
+    names = list(design["factor_names"])
+    head = ["Run", *[latex_escape(n) for n in names], *[latex_escape(m) for m in metrics]]
+    rows = []
+    for i, lab in enumerate(labels, start=1):
+        pt = design["points"][lab]
+        cells = [str(i), *[format_number(v, sig) for v in pt]]
+        for m in metrics:
+            if (lab, m) in ctx["cells"]:
+                mean_m, std_m = ctx["cells"][(lab, m)]
+                cells.append(f"$\\{mean_m} \\pm \\{std_m}$")
+            else:
+                cells.append("--")
+        rows.append(" & ".join(cells) + r" \\")
+    return "\n".join([
+        r"\begin{table}[htbp]", r"\centering", r"\caption{Central composite design and observed responses}",
+        r"\label{tab:auto-design}", r"\small", r"\resizebox{\ifdim\width>\linewidth\linewidth\else\width\fi}{!}{%",
+        r"\begin{tabular}{c" + "c" * len(names) + "c" * len(metrics) + "}", r"\toprule",
+        " & ".join(head) + r" \\", r"\midrule", *rows, r"\bottomrule", r"\end{tabular}}",
+        r"\par\footnotesize Responses: mean $\pm$ SD over repeated runs.", r"\end{table}", ""])
+
+
+def _anova_tables(bundle: ExperimentResultBundle, metrics: Sequence[str], sig: int) -> List[str]:
+    out = []
+    for t in bundle.statistical_tests:
+        if t.get("comparison") != "response_surface" or t["metric"] not in metrics:
+            continue
+        label = "" if t["metric"] == metrics[0] else "-" + macro_name(t["metric"]).lower()
+        rows = []
+        for r in t.get("anova", []):
+            f = format_number(r["f"], sig) if r.get("f") is not None else ""
+            ms = format_number(r["ms"], sig) if r.get("ms") is not None else ""
+            pv = format_p_value(r["p_value"]) if r.get("p_value") is not None else ""
+            rows.append(f"{r['source']} & {format_number(r['ss'], sig)} & {r['df']} & {ms} & {f} & {pv} \\\\")
+        out.append("\n".join([
+            r"\begin{table}[htbp]", r"\centering",
+            f"\\caption{{ANOVA of the second-order response-surface model ({latex_escape(t['metric'])})}}",
+            f"\\label{{tab:auto-anova{label}}}", r"\small",
+            r"\begin{tabular}{lrrrrr}", r"\toprule", r"Source & SS & df & MS & $F$ & $p$ \\", r"\midrule",
+            *rows, r"\bottomrule", r"\end{tabular}",
+            f"\\par\\footnotesize $R^2$ = \\Stat{macro_name('Rsm', t['metric'])}Rsq, adjusted $R^2$ = "
+            f"\\Stat{macro_name('Rsm', t['metric'])}RsqAdj.", r"\end{table}", ""]))
+        trows = []
+        stats_by_term = t.get("term_stats", {})
+        for term in [x for x in t["terms"] if x in stats_by_term]:
+            st = stats_by_term[term]
+            tv = format_number(st["t"], sig) if st.get("t") is not None else ""
+            sym = {n: f"x_{{{i + 1}}}" for i, n in enumerate(t["factors"])}
+            if term == "1":
+                tex = "Intercept"
+            elif term.endswith("^2"):
+                tex = f"${sym[term[:-2]]}^{{2}}$"
+            elif "*" in term:
+                a, b = term.split("*")
+                tex = f"${sym[a]}{sym[b]}$"
+            else:
+                tex = f"${sym[term]}$"
+            stars = st["significance"]
+            trows.append(f"{tex} & {format_number(st['coef'], sig)} & {format_number(st['se'], sig)} & {tv} & "
+                         f"{format_p_value(st['p_value'])} & {stars} \\\\")
+        if trows:
+            out.append("\n".join([
+                r"\begin{table}[htbp]", r"\centering",
+                f"\\caption{{Regression coefficients of the response-surface model ({latex_escape(t['metric'])})}}",
+                f"\\label{{tab:auto-coef{label}}}", r"\small",
+                r"\begin{tabular}{lrrrrc}", r"\toprule", r"Term & Coefficient & SE & $t$ & $p$ & Sig. \\",
+                r"\midrule", *trows, r"\bottomrule", r"\end{tabular}",
+                r"\par\footnotesize " + ", ".join(f"$x_{{{i + 1}}}$: {latex_escape(n)}"
+                                                  for i, n in enumerate(t["factors"])) + ".",
+                r"\end{table}", ""]))
+    return out
+
+
 def render_tables(bundle: ExperimentResultBundle, ctx: Mapping[str, Any], header: str,
-                  metrics: Optional[Sequence[str]] = None) -> str:
+                  metrics: Optional[Sequence[str]] = None, design: Optional[Mapping[str, Any]] = None,
+                  sig: int = 4, order: Sequence[str] = ()) -> str:
     metrics = list(metrics) if metrics else [m for m in _metric_names(bundle) if m != "runtime_s"] or _metric_names(bundle)
-    methods = list(bundle.methods_metrics)
-    ablation = [m for m in methods if m == "full" or m.startswith("w/o ")]
-    if ablation and "baseline" in methods:
-        ablation.append("baseline")
-    is_ablation = "full" in ablation and any(m.startswith("w/o ") for m in ablation)
+    groups = method_groups(bundle, list(design["points"]) if design else [], order)
     parts = [header, "% Requires: \\usepackage{booktabs,amsmath,graphicx} and \\input{generated/auto_metrics.tex}.", ""]
-    comparison = [m for m in methods if not is_ablation or m not in ablation]
-    if len(comparison) >= 2:
-        parts.append(_table(bundle, comparison, metrics, ctx, "Comparison with baseline methods",
+    if len(groups["comparison"]) >= 2:
+        parts.append(_table(bundle, groups["comparison"], metrics, ctx, "Comparison with baseline methods",
                             "tab:auto-comparison"))
-    if is_ablation:
-        parts.append(_table(bundle, ablation, metrics, ctx, "Ablation study", "tab:auto-ablation"))
+    if groups["ablation"]:
+        parts.append(_table(bundle, groups["ablation"], metrics, ctx, "Ablation study", "tab:auto-ablation"))
+    if design and groups["design"]:
+        parts.append(_design_table(bundle, design, groups["design"], metrics, ctx, sig))
+    parts += _anova_tables(bundle, metrics, sig)
     return "\n".join(parts)
 
 
+def render_figures(figures: Sequence[Mapping[str, str]]) -> str:
+    """``figures``: dicts with ``path`` (relative to the thesis root, no extension needed),
+    ``caption`` and ``label``; optional ``width`` (fraction of ``\\linewidth``)."""
+    parts = ["% auto_figures.tex -- AUTO-GENERATED by uni_thesis.tex_bridge. DO NOT EDIT BY HAND.", ""]
+    for f in figures:
+        width = f.get("width", "1.0")
+        parts += [r"\begin{figure}[htbp]", r"\centering",
+                  f"\\includegraphics[width={width}\\linewidth]{{{f['path']}}}",
+                  f"\\caption{{{f['caption']}}}", f"\\label{{{f['label']}}}", r"\end{figure}", ""]
+    return "\n".join(parts)
+
+
+def render_literature(records: Sequence[Any]) -> str:
+    """Related-work digest citing only DOI-verified records (one ``\\item`` per record)."""
+    verified = [r for r in records if r.verified and r.doi]
+    parts = ["% auto_literature.tex -- AUTO-GENERATED by uni_thesis.tex_bridge. DO NOT EDIT BY HAND.", ""]
+    if not verified:
+        parts.append(r"No DOI-verified reference was retrieved for this topic.")
+        return "\n".join(parts) + "\n"
+    parts.append(r"\begin{itemize}")
+    for r in sorted(verified, key=lambda x: (x.year, x.cite_key)):
+        line = f"\\item \\citet{{{r.cite_key}}} ({latex_escape(r.venue)}): {latex_escape(r.methodology_tag)}."
+        if r.limitation_note:
+            line += f" Reported limitation: {latex_escape(r.limitation_note)}"
+        parts.append(line)
+    parts.append(r"\end{itemize}")
+    return "\n".join(parts) + "\n"
+
+
 def generate_tex_artifacts(metrics_json_path: PathLike, out_dir: PathLike, proposed: Optional[str] = None,
-                           metrics: Optional[Sequence[str]] = None, sig: int = 4) -> Dict[str, str]:
-    """Verify ``metrics.json`` and write ``auto_metrics.tex`` + ``auto_tables.tex`` into ``out_dir``."""
+                           metrics: Optional[Sequence[str]] = None, sig: int = 4, title: Optional[str] = None,
+                           raw_series: Optional[PathLike] = None) -> Dict[str, str]:
+    """Verify ``metrics.json`` and write ``auto_metrics.tex`` + ``auto_tables.tex`` into ``out_dir``.
+
+    ``metrics`` (default: every metric except runtime) selects table columns and the
+    primary metric (first entry) behind the profile-agnostic role macros."""
     mpath = Path(metrics_json_path)
     bundle = ExperimentResultBundle.load(mpath)
     sha = file_sha256(mpath)
     macros, ctx = build_macros(bundle, proposed, sig)
+    design, order = _raw_series_info(bundle, raw_series)
+    groups = method_groups(bundle, list(design["points"]) if design else [], order)
+    cols = list(metrics) if metrics else [m for m in _metric_names(bundle) if m != "runtime_s"] or _metric_names(bundle)
+    _rsm_term_macros(bundle, macros, sig)
+    flags = _role_macros(bundle, macros, ctx, groups, cols[0], title, sig)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     mp, tp = out / "auto_metrics.tex", out / "auto_tables.tex"
-    mp.write_text(render_macros(macros, _header("auto_metrics.tex", sha, bundle)), encoding="utf-8")
-    tp.write_text(render_tables(bundle, ctx, _header("auto_tables.tex", sha, bundle), metrics), encoding="utf-8")
+    mp.write_text(render_macros(macros, _header("auto_metrics.tex", sha, bundle)) + render_flags(flags),
+                  encoding="utf-8")
+    tp.write_text(render_tables(bundle, ctx, _header("auto_tables.tex", sha, bundle), cols, design, sig, order),
+                  encoding="utf-8")
     return {"auto_metrics": str(mp), "auto_tables": str(tp), SHA_HEADER_KEY: sha, "proposed": ctx["proposed"],
-            "n_macros": str(len(macros))}
+            "n_macros": str(len(macros)), **{k: str(v).lower() for k, v in flags.items()}}

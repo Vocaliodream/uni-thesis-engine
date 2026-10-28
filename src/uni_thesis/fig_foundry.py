@@ -123,7 +123,7 @@ def plot_signal_comparison(t: Sequence[float], reference: Sequence[float], outpu
     ax_t.set_xlabel("Time (s)")
     ax_t.set_ylabel(ylabel)
     ax_t.set_title("(a) Time-domain comparison", loc="left")
-    ax_t.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=min(4, len(series)))
+    ax_t.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=min(2, len(series)), fontsize=7)
 
     ins = ax_t.inset_axes([0.64, 0.52, 0.34, 0.44])
     mask = (t >= zoom[0]) & (t <= zoom[1])

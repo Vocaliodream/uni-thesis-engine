@@ -1,0 +1,49 @@
+\chapter{Experiments and Results}
+\label{chap:experiments}
+
+\section{Overview}
+This chapter reports the outcomes of the experiments declared in profile \texttt{\ThesisProfileId}.
+Every value below is a macro generated from the signed result bundle; tables and figures are
+produced by the same pipeline.
+
+\input{generated/auto_tables.tex}
+
+\ifAutoHasComparison
+\section{Comparison with baseline methods}
+Table~\ref{tab:auto-comparison} summarises all metrics. On \MetricPrimaryName, the proposed
+method (\MetricPrimaryProposedName) achieves \MetricPrimaryProposedMean{} $\pm$
+\MetricPrimaryProposedStd{} \MetricPrimaryUnit{} (confidence interval \MetricPrimaryProposedCiLow{} to
+\MetricPrimaryProposedCiHigh), whereas the strongest baseline (\MetricPrimaryRunnerUpName) reaches
+\MetricPrimaryRunnerUpMean{} $\pm$ \MetricPrimaryRunnerUpStd. The difference of \DiffPrimaryAbs{}
+(\DiffPrimaryRelPct\,\% relative) is assessed with the \StatPrimaryTest{} ($p$ \StatPrimaryPval;
+\StatPrimaryEffectName{} \StatPrimaryEffect; \StatPrimaryN{} runs per method). Across all methods,
+the \StatPrimaryOmnibusTest{} yields $p$ \StatPrimaryOmnibusPval.
+\fi
+
+\ifAutoHasAblation
+\section{Ablation study}
+Table~\ref{tab:auto-ablation} reports the ablation configurations. The full system reaches
+\MetricPrimaryProposedMean{} $\pm$ \MetricPrimaryProposedStd{} \MetricPrimaryUnit{} on
+\MetricPrimaryName, against \MetricPrimaryRunnerUpMean{} for the best reduced configuration
+(\MetricPrimaryRunnerUpName), a gain of \DiffPrimaryAbs{} (\DiffPrimaryRelPct\,\%; \StatPrimaryTest,
+$p$ \StatPrimaryPval). The omnibus \StatPrimaryOmnibusTest{} across configurations gives
+$p$ \StatPrimaryOmnibusPval.
+\fi
+
+\ifAutoHasRsm
+\section{Response surface optimisation}
+The design runs are listed in Table~\ref{tab:auto-design}. The fitted model
+(Table~\ref{tab:auto-coef}) reads
+\begin{equation}
+  \StatRsmPrimaryEquation
+\end{equation}
+with \StatRsmPrimaryFactorLegend. The ANOVA in Table~\ref{tab:auto-anova} gives
+$R^{2}$ = \StatRsmPrimaryRsq{} and adjusted $R^{2}$ = \StatRsmPrimaryRsqAdj{}
+($F$ = \StatRsmPrimaryFvalue, $p$ \StatRsmPrimaryPval), and the lack-of-fit test returns
+$p$ \StatRsmPrimaryLackOfFitPval. The stationary point is a \StatRsmPrimaryOptNature{} located at
+\StatRsmPrimaryOptPoint, with a predicted response of \StatRsmPrimaryOptResponse{}
+\MetricPrimaryUnit. Figure~\ref{fig:auto-rsm} visualises the surface.
+\fi
+
+\section{Figures}
+\input{generated/auto_figures.tex}

@@ -175,16 +175,21 @@ def _crossref_year(msg: Mapping[str, Any]) -> Optional[int]:
     return None
 
 
+def _clean_name_part(text: Any) -> str:
+    """Strip stray separators Crossref deposits sometimes carry (``"Ameh,"``, ``" C. U., "``)."""
+    return re.sub(r"\s+", " ", str(text or "")).strip(" ,;")
+
+
 def _crossref_authors(msg: Mapping[str, Any]) -> List[str]:
     out: List[str] = []
     for a in msg.get("author") or []:
-        family = (a.get("family") or "").strip()
-        given = (a.get("given") or "").strip()
+        family = _clean_name_part(a.get("family"))
+        given = _clean_name_part(a.get("given"))
         if family:
             out.append(f"{family}, {given}" if given else family)
         elif a.get("name"):
-            out.append(str(a["name"]).strip())
-    return out
+            out.append(_clean_name_part(a["name"]))
+    return [n for n in out if n]
 
 
 def _first(value: Any) -> str:
@@ -524,7 +529,12 @@ def _bib_escape(text: str) -> str:
 
 
 def _bib_author(name: str) -> str:
-    return _bib_escape(name.strip())
+    """BibTeX name: at most one ``Last, First`` comma; a mononym or a name whose parts
+    carried extra commas is braced so BibTeX keeps it verbatim."""
+    clean = _clean_name_part(name)
+    if clean.count(",") > 1:
+        return "{" + _bib_escape(clean) + "}"
+    return _bib_escape(clean)
 
 
 def _is_proceedings(venue: str) -> bool:

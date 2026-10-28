@@ -30,3 +30,8 @@
 ## 自动执行（Step 4 起）
 - `uni-thesis build-tex results/<profile_id>/metrics.json` 生成 `templates/thesis_tex/generated/auto_metrics.tex` 与 `auto_tables.tex`（带 `metrics_sha256` 溯源头）。
 - `python scripts/audit_anti_hallucination.py --tex-dir templates/thesis_tex --bib templates/thesis_tex/refs.bib --metrics results/<profile_id>/metrics.json` 执行三道门禁（裸数字 / 引用真实性 / 溯源哈希），非零退出即禁止合入。
+
+## 一键流水线（Step 5 起）
+- `uni-thesis run --profile profiles/<topic>.yaml [--offline]`：文献核验 → 实验 → 统计路由 → 600 DPI 制图 → LaTeX 宏/三线表 → 反幻觉审计；产物在 `results/<profile_id>/`（`thesis/` 为可编译论文树）。
+- `uni-thesis audit --profile ...` 单独审计；`uni-thesis pdf --profile ...` 编译 `results/<profile_id>/thesis.pdf`。
+- 示范课题：`profiles/demo_biosignal.yaml`（ECG/PPG 零相位滤波）、`profiles/demo_rsm_opt.yaml`（三因子 CCD 响应面 + 四阶段消融）。

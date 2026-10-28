@@ -26,3 +26,7 @@
 | `templates/thesis_tex/` | LaTeX 论文模板 |
 | `scripts/` | 运维/批处理脚本 |
 | `tests/` | 单元测试 |
+
+## 自动执行（Step 4 起）
+- `uni-thesis build-tex results/<profile_id>/metrics.json` 生成 `templates/thesis_tex/generated/auto_metrics.tex` 与 `auto_tables.tex`（带 `metrics_sha256` 溯源头）。
+- `python scripts/audit_anti_hallucination.py --tex-dir templates/thesis_tex --bib templates/thesis_tex/refs.bib --metrics results/<profile_id>/metrics.json` 执行三道门禁（裸数字 / 引用真实性 / 溯源哈希），非零退出即禁止合入。

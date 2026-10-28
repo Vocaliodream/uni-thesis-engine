@@ -2,6 +2,7 @@
 # Demo topic B: three-factor central composite design + four-stage incremental ablation.
 profile_id: demo_rsm_opt
 title: Response Surface Optimisation of Multi-Factor Process Parameters with Core-Module Ablation
+title_zh: 多因子工艺参数响应面优化（RSM）与核心模块消融研究
 domain_type: parameter_optimization
 literature_query:
   keywords: [response surface methodology, central composite design, optimum conditions, process optimization]

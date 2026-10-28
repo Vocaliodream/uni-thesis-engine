@@ -1,0 +1,50 @@
+% =====================================================================
+% uni-thesis-engine -- 中文模块化毕业论文模板（XeLaTeX / LuaLaTeX）
+% 使用 ctex 宏集与 TeX Live 自带的开源 Fandol 字体，无需任何商用字体。
+% 所有实验数值、图表与引用均来自 generated/ 下的自动生成文件：
+%   generated/auto_metrics.tex     结果宏（\Metric... \Stat... \Diff...）及条件开关
+%   generated/auto_tables.tex      booktabs 三线表
+%   generated/auto_figures.tex     fig_foundry 矢量图
+%   generated/auto_literature.tex  DOI 核验后的相关文献
+% 切勿在 chapters/ 中手写实验数值，否则反幻觉审计将拒绝通过。
+% =====================================================================
+\documentclass[UTF8,zihao=-4,fontset=fandol,oneside]{ctexrep}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[round,authoryear]{natbib}
+\usepackage[hidelinks]{hyperref}
+
+\ctexset{bibname = {参考文献}}
+
+\input{generated/auto_metrics.tex}
+
+\title{\ThesisTitle}
+\author{作者姓名\\ \small 指导教师：导师姓名}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本文研究课题“\ThesisTitle”。研究构建了一条可复现的自动化流程：检索并以 DOI 核验相关文献，
+依据声明式课题配置执行全部实验，按数据假设自动路由统计检验，并通过自动生成的宏将全部结果注入正文。
+在主要指标（\MetricPrimaryName）上，本文配置（\MetricPrimaryProposedName）达到
+\MetricPrimaryProposedMean{} $\pm$ \MetricPrimaryProposedStd{} \MetricPrimaryUnit，最强对照方案
+（\MetricPrimaryRunnerUpName）为 \MetricPrimaryRunnerUpMean（$p$ \StatPrimaryPval，\StatPrimaryTest）。
+\end{abstract}
+
+\tableofcontents
+
+\input{chapters/chap1_intro}
+\input{chapters/chap2_related}
+\input{chapters/chap3_method}
+\input{chapters/chap4_experiments}
+\input{chapters/chap5_conclusion}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

@@ -35,3 +35,4 @@
 - `uni-thesis run --profile profiles/<topic>.yaml [--offline]`：文献核验 → 实验 → 统计路由 → 600 DPI 制图 → LaTeX 宏/三线表 → 反幻觉审计；产物在 `results/<profile_id>/`（`thesis/` 为可编译论文树）。
 - `uni-thesis audit --profile ...` 单独审计；`uni-thesis pdf --profile ...` 编译 `results/<profile_id>/thesis.pdf`。
 - 示范课题：`profiles/demo_biosignal.yaml`（ECG/PPG 零相位滤波）、`profiles/demo_rsm_opt.yaml`（三因子 CCD 响应面 + 四阶段消融）。
+- 中文模板：`uni-thesis run --profile ... --template-dir templates/thesis_tex_zh` 后 `uni-thesis pdf --profile ...`（模板内 `template.json` 指定 `lang: zh`、`engine: xelatex`；ctex + TeX Live 自带开源 Fandol 字体）。课题配置可选 `title_zh` 作为中文题目；表题、图注、文献摘要随模板语言自动切换。

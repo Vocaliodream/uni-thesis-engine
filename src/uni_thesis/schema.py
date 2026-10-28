@@ -157,6 +157,7 @@ class AblationConfig(_StrictModel):
 class TopicProfile(_StrictModel):
     profile_id: StrictStr
     title: StrictStr = Field(min_length=1)
+    title_zh: Optional[StrictStr] = Field(default=None, min_length=1)
     domain_type: DomainType
     literature_query: LiteratureQuery
     data_config: DataConfig

@@ -1,0 +1,43 @@
+\chapter{实验与结果分析}
+\label{chap:experiments}
+
+\section{概述}
+本章报告课题配置 \texttt{\ThesisProfileId} 中声明的全部实验结果。下文所有数值均为由签名结果包
+自动生成的宏，表格与图形亦由同一流程产出。
+
+\input{generated/auto_tables.tex}
+
+\ifAutoHasComparison
+\section{与基线方法的对比}
+表~\ref{tab:auto-comparison}~汇总了各项指标。在\MetricPrimaryName{}上，本文方法
+（\MetricPrimaryProposedName）达到 \MetricPrimaryProposedMean{} $\pm$ \MetricPrimaryProposedStd{}
+\MetricPrimaryUnit（置信区间 \MetricPrimaryProposedCiLow{} 至 \MetricPrimaryProposedCiHigh），
+最强基线（\MetricPrimaryRunnerUpName）为 \MetricPrimaryRunnerUpMean{} $\pm$ \MetricPrimaryRunnerUpStd。
+两者相差 \DiffPrimaryAbs（相对提升 \DiffPrimaryRelPct\,\%），经\StatPrimaryTest{}检验
+$p$ \StatPrimaryPval（效应量 \StatPrimaryEffectName{} 为 \StatPrimaryEffect；每种方法 \StatPrimaryN{} 次运行）。
+全部方法间的\StatPrimaryOmnibusTest{}给出 $p$ \StatPrimaryOmnibusPval。
+\fi
+
+\ifAutoHasAblation
+\section{消融实验}
+表~\ref{tab:auto-ablation}~列出了各消融配置。完整系统在\MetricPrimaryName{}上达到
+\MetricPrimaryProposedMean{} $\pm$ \MetricPrimaryProposedStd{} \MetricPrimaryUnit，最优的精简配置
+（\MetricPrimaryRunnerUpName）为 \MetricPrimaryRunnerUpMean，提升 \DiffPrimaryAbs（\DiffPrimaryRelPct\,\%；
+\StatPrimaryTest，$p$ \StatPrimaryPval）。各配置间的\StatPrimaryOmnibusTest{}给出 $p$ \StatPrimaryOmnibusPval。
+\fi
+
+\ifAutoHasRsm
+\section{响应面寻优}
+各设计试验点列于表~\ref{tab:auto-design}。拟合模型（表~\ref{tab:auto-coef}）为
+\begin{equation}
+  \StatRsmPrimaryEquation
+\end{equation}
+其中 \StatRsmPrimaryFactorLegend。表~\ref{tab:auto-anova}~的方差分析给出
+$R^{2}$ = \StatRsmPrimaryRsq，调整 $R^{2}$ = \StatRsmPrimaryRsqAdj（$F$ = \StatRsmPrimaryFvalue，
+$p$ \StatRsmPrimaryPval），失拟检验 $p$ \StatRsmPrimaryLackOfFitPval。驻点为\StatRsmPrimaryOptNature，
+位于 \StatRsmPrimaryOptPoint，预测响应为 \StatRsmPrimaryOptResponse{} \MetricPrimaryUnit。
+图~\ref{fig:auto-rsm}~展示了响应面形态。
+\fi
+
+\section{图示}
+\input{generated/auto_figures.tex}

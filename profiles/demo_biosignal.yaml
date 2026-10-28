@@ -2,6 +2,7 @@
 # Demo topic A: wearable multi-modal (ECG + PPG) zero-phase filtering benchmark.
 profile_id: demo_biosignal
 title: Zero-Phase Filtering and Feature Extraction for Wearable Multi-Modal ECG/PPG Signals
+title_zh: 可穿戴多模态生理信号（ECG/PPG）零相位滤波与特征提取研究
 domain_type: signal_processing
 literature_query:
   keywords: [ECG, photoplethysmography, zero-phase filtering, signal denoising, smoothing, QRS detection]

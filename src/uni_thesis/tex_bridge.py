@@ -41,6 +41,7 @@ __all__ = [
     "render_flags",
     "render_figures",
     "render_literature",
+    "SUPPORTED_LANGS",
     "SHA_HEADER_KEY",
 ]
 
@@ -58,6 +59,55 @@ _TEST_LABELS = {
     "one_way_anova": "one-way ANOVA", "kruskal_wallis_h": "Kruskal-Wallis H test",
     "rsm_quadratic_ols": "second-order RSM (OLS)", "identical_samples": "identical samples",
 }
+
+
+_STRINGS: Dict[str, Dict[str, str]] = {
+    "en": {
+        "method": "Method", "proposed": " (proposed)", "comparison": "Comparison with baseline methods",
+        "ablation": "Ablation study", "design": "Central composite design and observed responses",
+        "run": "Run", "design_note": "Responses: mean $\\pm$ SD over repeated runs.",
+        "note": "Mean $\\pm$ SD. Bold: best; underline: second best. Superscripts: significance versus the "
+                "proposed method ($^{*}p<0.05$, $^{**}p<0.01$, $^{***}p<0.001$",
+        "anova": "ANOVA of the second-order response-surface model ({m})",
+        "coef": "Regression coefficients of the response-surface model ({m})",
+        "source": "Source", "term": "Term", "coefficient": "Coefficient", "sig": "Sig.", "intercept": "Intercept",
+        "adj": "$R^2$ = {r}, adjusted $R^2$ = {a}.",
+        "Model": "Model", "Residual": "Residual", "Lack of fit": "Lack of fit", "Pure error": "Pure error",
+        "Total": "Total", "maximum": "maximum", "minimum": "minimum", "saddle": "saddle point",
+        "no_refs": "No DOI-verified reference was retrieved for this topic.",
+        "limitation": " Reported limitation: ",
+    },
+    "zh": {
+        "method": "方法", "proposed": "（本文）", "comparison": "与基线方法的对比", "ablation": "消融实验",
+        "design": "中心复合设计及实测响应", "run": "试验号", "design_note": "响应值：重复试验的均值 $\\pm$ 标准差。",
+        "note": "均值 $\\pm$ 标准差。粗体：最优；下划线：次优。上标为相对本文方法的显著性"
+                "（$^{*}p<0.05$，$^{**}p<0.01$，$^{***}p<0.001$",
+        "anova": "二阶响应面模型方差分析（{m}）", "coef": "响应面模型回归系数（{m}）",
+        "source": "来源", "term": "项", "coefficient": "系数", "sig": "显著性", "intercept": "常数项",
+        "adj": "$R^2$ = {r}，调整 $R^2$ = {a}。",
+        "Model": "模型", "Residual": "残差", "Lack of fit": "失拟项", "Pure error": "纯误差", "Total": "总计",
+        "maximum": "极大值点", "minimum": "极小值点", "saddle": "鞍点",
+        "no_refs": "本课题未检索到经 DOI 核验的文献。", "limitation": " 文献自述局限：",
+    },
+}
+_TEST_LABELS_ZH = {
+    "paired_t_test": "配对 t 检验", "student_t_test": "Student t 检验", "welch_t_test": "Welch t 检验",
+    "wilcoxon_signed_rank": "Wilcoxon 符号秩检验", "mann_whitney_u": "Mann-Whitney U 检验",
+    "one_way_anova": "单因素方差分析", "kruskal_wallis_h": "Kruskal-Wallis H 检验",
+    "identical_samples": "样本完全相同",
+}
+SUPPORTED_LANGS = tuple(_STRINGS)
+
+
+def _s(lang: str, key: str) -> str:
+    if lang not in _STRINGS:
+        raise ValueError(f"unsupported language '{lang}'; choose from {SUPPORTED_LANGS}")
+    return _STRINGS[lang][key]
+
+
+def _test_label(test: str, lang: str = "en") -> str:
+    table = _TEST_LABELS_ZH if lang == "zh" else _TEST_LABELS
+    return table.get(test, _TEST_LABELS.get(test, test.replace("_", " ")))
 
 
 class MacroNameCollision(ValueError):
@@ -198,7 +248,7 @@ class _MacroTable:
 
 
 def build_macros(bundle: ExperimentResultBundle, proposed: Optional[str] = None,
-                 sig: int = 4) -> Tuple[Dict[str, str], Dict[str, Any]]:
+                 sig: int = 4, lang: str = "en") -> Tuple[Dict[str, str], Dict[str, Any]]:
     """Return ``(macros, context)``; ``context`` holds the names the tables reuse."""
     proposed = proposed or _infer_proposed(bundle)
     if proposed not in bundle.methods_metrics:
@@ -259,7 +309,7 @@ def build_macros(bundle: ExperimentResultBundle, proposed: Optional[str] = None,
             st = "Stat" + h
             tab.add(st + "Pval", format_p_value(t["p_value"]), origin + "|p")
             tab.add(st + "Stars", t["significance"], origin + "|stars")
-            tab.add(st + "Test", latex_escape(_TEST_LABELS.get(t["test"], t["test"].replace("_", " "))), origin + "|test")
+            tab.add(st + "Test", latex_escape(_test_label(t["test"], lang)), origin + "|test")
             if t.get("statistic") is not None:
                 tab.add(st + "Statistic", format_number(t["statistic"], sig), origin + "|stat")
             eff = t.get("effect_size")
@@ -276,7 +326,7 @@ def build_macros(bundle: ExperimentResultBundle, proposed: Optional[str] = None,
                     for factor, val in sp["point"].items():
                         tab.add(st + "Opt" + macro_name(factor), format_number(val, sig), origin + f"|opt|{factor}")
                     tab.add(st + "OptResponse", format_number(sp["predicted_response"], sig), origin + "|optresp")
-                    tab.add(st + "OptNature", sp["nature"], origin + "|nature")
+                    tab.add(st + "OptNature", _s(lang, sp["nature"]), origin + "|nature")
 
     context = {"proposed": proposed, "cells": cell_macros, "stars": stars_lookup}
     return tab.macros, context
@@ -315,24 +365,24 @@ def _cell(method: str, metric: str, ctx: Mapping[str, Any], best: Optional[str],
 
 
 def _table(bundle: ExperimentResultBundle, methods: Sequence[str], metrics: Sequence[str], ctx: Mapping[str, Any],
-           caption: str, label: str) -> str:
+           caption: str, label: str, lang: str = "en") -> str:
     rankings = {m: _ranking(bundle, m, methods) for m in metrics}
-    head = ["Method"]
+    head = [_s(lang, "method")]
     for m in metrics:
         unit = next((bundle.methods_metrics[x][m].unit for x in methods if m in bundle.methods_metrics[x]
                      and bundle.methods_metrics[x][m].unit), "")
         head.append(latex_escape(m) + (f" ({latex_escape(unit)})" if unit else ""))
     rows = []
     for method in methods:
-        name = latex_escape(method) + (" (proposed)" if method == ctx["proposed"] else "")
+        name = latex_escape(method) + (_s(lang, "proposed") if method == ctx["proposed"] else "")
         cells = [_cell(method, m, ctx, *rankings[m]) if (method, m) in ctx["cells"] else "--" for m in metrics]
         rows.append(" & ".join([name] + cells) + r" \\")
-    tests_used = sorted({_TEST_LABELS.get(t["test"], t["test"]) for t in bundle.statistical_tests
+    tests_used = sorted({_test_label(t["test"], lang) for t in bundle.statistical_tests
                          if t.get("comparison") == "pairwise" and t["method_a"] == ctx["proposed"]
                          and t["method_b"] in methods and t["metric"] in metrics})
-    note = (r"\par\footnotesize Mean $\pm$ SD. Bold: best; underline: second best. "
-            r"Superscripts: significance versus the proposed method ($^{*}p<0.05$, $^{**}p<0.01$, $^{***}p<0.001$"
-            + (f"; {latex_escape(', '.join(tests_used))}" if tests_used else "") + ").")
+    sep, close = ("；", "）。") if lang == "zh" else ("; ", ").")
+    note = (r"\par\footnotesize " + _s(lang, "note")
+            + (sep + latex_escape(", ".join(tests_used)) if tests_used else "") + close)
     return "\n".join([
         r"\begin{table}[htbp]",
         r"\centering",
@@ -427,7 +477,8 @@ _NA = r"\textit{N/A}"
 
 
 def _role_macros(bundle: ExperimentResultBundle, macros: Dict[str, str], ctx: Mapping[str, Any],
-                 groups: Mapping[str, List[str]], primary: str, title: Optional[str], sig: int) -> Dict[str, bool]:
+                 groups: Mapping[str, List[str]], primary: str, title: Optional[str], sig: int,
+                 lang: str = "en") -> Dict[str, bool]:
     """Profile-agnostic macros for the generic thesis template; absent facts are ``N/A``."""
     proposed = ctx["proposed"]
     mm = bundle.methods_metrics
@@ -474,7 +525,7 @@ def _role_macros(bundle: ExperimentResultBundle, macros: Dict[str, str], ctx: Ma
                 if (t.get("comparison") == "pairwise" and t["metric"] == primary and t["method_a"] == proposed
                         and t["method_b"] == ru):
                     role.update({"StatPrimaryPval": format_p_relation(t["p_value"]), "StatPrimaryStars": t["significance"],
-                                 "StatPrimaryTest": latex_escape(_TEST_LABELS.get(t["test"], t["test"])),
+                                 "StatPrimaryTest": latex_escape(_test_label(t["test"], lang)),
                                  "StatPrimaryN": str(t.get("n_a", ""))})
                     eff = t.get("effect_size") or {}
                     if eff.get("value") is not None and eff.get("name") != "none":
@@ -483,7 +534,7 @@ def _role_macros(bundle: ExperimentResultBundle, macros: Dict[str, str], ctx: Ma
     for t in bundle.statistical_tests:
         if t.get("comparison") == "multi_group" and t["metric"] == primary:
             role["StatPrimaryOmnibusPval"] = format_p_relation(t["p_value"])
-            role["StatPrimaryOmnibusTest"] = latex_escape(_TEST_LABELS.get(t["test"], t["test"]))
+            role["StatPrimaryOmnibusTest"] = latex_escape(_test_label(t["test"], lang))
         if t.get("comparison") == "response_surface" and t["metric"] == primary:
             role.update({"StatRsmPrimaryRsq": format_number(t["r2"], sig),
                          "StatRsmPrimaryRsqAdj": format_number(t["r2_adj"], sig),
@@ -499,7 +550,7 @@ def _role_macros(bundle: ExperimentResultBundle, macros: Dict[str, str], ctx: Ma
             sp = t.get("stationary_point")
             if sp:
                 role["StatRsmPrimaryOptResponse"] = format_number(sp["predicted_response"], sig)
-                role["StatRsmPrimaryOptNature"] = sp["nature"]
+                role["StatRsmPrimaryOptNature"] = _s(lang, sp["nature"])
                 role["StatRsmPrimaryOptPoint"] = ", ".join(
                     f"{latex_escape(k)} = {format_number(v, sig)}" for k, v in sp["point"].items())
     for k, v in role.items():
@@ -535,9 +586,9 @@ def render_flags(flags: Mapping[str, bool]) -> str:
 
 
 def _design_table(bundle: ExperimentResultBundle, design: Mapping[str, Any], labels: Sequence[str],
-                  metrics: Sequence[str], ctx: Mapping[str, Any], sig: int) -> str:
+                  metrics: Sequence[str], ctx: Mapping[str, Any], sig: int, lang: str = "en") -> str:
     names = list(design["factor_names"])
-    head = ["Run", *[latex_escape(n) for n in names], *[latex_escape(m) for m in metrics]]
+    head = [_s(lang, "run"), *[latex_escape(n) for n in names], *[latex_escape(m) for m in metrics]]
     rows = []
     for i, lab in enumerate(labels, start=1):
         pt = design["points"][lab]
@@ -550,14 +601,14 @@ def _design_table(bundle: ExperimentResultBundle, design: Mapping[str, Any], lab
                 cells.append("--")
         rows.append(" & ".join(cells) + r" \\")
     return "\n".join([
-        r"\begin{table}[htbp]", r"\centering", r"\caption{Central composite design and observed responses}",
+        r"\begin{table}[htbp]", r"\centering", "\\caption{" + _s(lang, "design") + "}",
         r"\label{tab:auto-design}", r"\small", r"\resizebox{\ifdim\width>\linewidth\linewidth\else\width\fi}{!}{%",
         r"\begin{tabular}{c" + "c" * len(names) + "c" * len(metrics) + "}", r"\toprule",
         " & ".join(head) + r" \\", r"\midrule", *rows, r"\bottomrule", r"\end{tabular}}",
-        r"\par\footnotesize Responses: mean $\pm$ SD over repeated runs.", r"\end{table}", ""])
+        r"\par\footnotesize " + _s(lang, "design_note"), r"\end{table}", ""])
 
 
-def _anova_tables(bundle: ExperimentResultBundle, metrics: Sequence[str], sig: int) -> List[str]:
+def _anova_tables(bundle: ExperimentResultBundle, metrics: Sequence[str], sig: int, lang: str = "en") -> List[str]:
     out = []
     for t in bundle.statistical_tests:
         if t.get("comparison") != "response_surface" or t["metric"] not in metrics:
@@ -568,15 +619,15 @@ def _anova_tables(bundle: ExperimentResultBundle, metrics: Sequence[str], sig: i
             f = format_number(r["f"], sig) if r.get("f") is not None else ""
             ms = format_number(r["ms"], sig) if r.get("ms") is not None else ""
             pv = format_p_value(r["p_value"]) if r.get("p_value") is not None else ""
-            rows.append(f"{r['source']} & {format_number(r['ss'], sig)} & {r['df']} & {ms} & {f} & {pv} \\\\")
+            rows.append(f"{_s(lang, r['source'])} & {format_number(r['ss'], sig)} & {r['df']} & {ms} & {f} & {pv} \\\\")
         out.append("\n".join([
             r"\begin{table}[htbp]", r"\centering",
-            f"\\caption{{ANOVA of the second-order response-surface model ({latex_escape(t['metric'])})}}",
+            "\\caption{" + _s(lang, "anova").format(m=latex_escape(t["metric"])) + "}",
             f"\\label{{tab:auto-anova{label}}}", r"\small",
-            r"\begin{tabular}{lrrrrr}", r"\toprule", r"Source & SS & df & MS & $F$ & $p$ \\", r"\midrule",
+            r"\begin{tabular}{lrrrrr}", r"\toprule", _s(lang, "source") + r" & SS & df & MS & $F$ & $p$ \\", r"\midrule",
             *rows, r"\bottomrule", r"\end{tabular}",
-            f"\\par\\footnotesize $R^2$ = \\Stat{macro_name('Rsm', t['metric'])}Rsq, adjusted $R^2$ = "
-            f"\\Stat{macro_name('Rsm', t['metric'])}RsqAdj.", r"\end{table}", ""]))
+            r"\par\footnotesize " + _s(lang, "adj").format(r=f"\\Stat{macro_name('Rsm', t['metric'])}Rsq",
+                                                             a=f"\\Stat{macro_name('Rsm', t['metric'])}RsqAdj"), r"\end{table}", ""]))
         trows = []
         stats_by_term = t.get("term_stats", {})
         for term in [x for x in t["terms"] if x in stats_by_term]:
@@ -584,7 +635,7 @@ def _anova_tables(bundle: ExperimentResultBundle, metrics: Sequence[str], sig: i
             tv = format_number(st["t"], sig) if st.get("t") is not None else ""
             sym = {n: f"x_{{{i + 1}}}" for i, n in enumerate(t["factors"])}
             if term == "1":
-                tex = "Intercept"
+                tex = _s(lang, "intercept")
             elif term.endswith("^2"):
                 tex = f"${sym[term[:-2]]}^{{2}}$"
             elif "*" in term:
@@ -598,9 +649,9 @@ def _anova_tables(bundle: ExperimentResultBundle, metrics: Sequence[str], sig: i
         if trows:
             out.append("\n".join([
                 r"\begin{table}[htbp]", r"\centering",
-                f"\\caption{{Regression coefficients of the response-surface model ({latex_escape(t['metric'])})}}",
+                "\\caption{" + _s(lang, "coef").format(m=latex_escape(t["metric"])) + "}",
                 f"\\label{{tab:auto-coef{label}}}", r"\small",
-                r"\begin{tabular}{lrrrrc}", r"\toprule", r"Term & Coefficient & SE & $t$ & $p$ & Sig. \\",
+                r"\begin{tabular}{lrrrrc}", r"\toprule", " & ".join([_s(lang, "term"), _s(lang, "coefficient"), "SE", "$t$", "$p$", _s(lang, "sig")]) + r" \\",
                 r"\midrule", *trows, r"\bottomrule", r"\end{tabular}",
                 r"\par\footnotesize " + ", ".join(f"$x_{{{i + 1}}}$: {latex_escape(n)}"
                                                   for i, n in enumerate(t["factors"])) + ".",
@@ -610,18 +661,18 @@ def _anova_tables(bundle: ExperimentResultBundle, metrics: Sequence[str], sig: i
 
 def render_tables(bundle: ExperimentResultBundle, ctx: Mapping[str, Any], header: str,
                   metrics: Optional[Sequence[str]] = None, design: Optional[Mapping[str, Any]] = None,
-                  sig: int = 4, order: Sequence[str] = ()) -> str:
+                  sig: int = 4, order: Sequence[str] = (), lang: str = "en") -> str:
     metrics = list(metrics) if metrics else [m for m in _metric_names(bundle) if m != "runtime_s"] or _metric_names(bundle)
     groups = method_groups(bundle, list(design["points"]) if design else [], order)
     parts = [header, "% Requires: \\usepackage{booktabs,amsmath,graphicx} and \\input{generated/auto_metrics.tex}.", ""]
     if len(groups["comparison"]) >= 2:
-        parts.append(_table(bundle, groups["comparison"], metrics, ctx, "Comparison with baseline methods",
-                            "tab:auto-comparison"))
+        parts.append(_table(bundle, groups["comparison"], metrics, ctx, _s(lang, "comparison"),
+                            "tab:auto-comparison", lang))
     if groups["ablation"]:
-        parts.append(_table(bundle, groups["ablation"], metrics, ctx, "Ablation study", "tab:auto-ablation"))
+        parts.append(_table(bundle, groups["ablation"], metrics, ctx, _s(lang, "ablation"), "tab:auto-ablation", lang))
     if design and groups["design"]:
-        parts.append(_design_table(bundle, design, groups["design"], metrics, ctx, sig))
-    parts += _anova_tables(bundle, metrics, sig)
+        parts.append(_design_table(bundle, design, groups["design"], metrics, ctx, sig, lang))
+    parts += _anova_tables(bundle, metrics, sig, lang)
     return "\n".join(parts)
 
 
@@ -637,18 +688,19 @@ def render_figures(figures: Sequence[Mapping[str, str]]) -> str:
     return "\n".join(parts)
 
 
-def render_literature(records: Sequence[Any]) -> str:
+def render_literature(records: Sequence[Any], lang: str = "en") -> str:
     """Related-work digest citing only DOI-verified records (one ``\\item`` per record)."""
     verified = [r for r in records if r.verified and r.doi]
     parts = ["% auto_literature.tex -- AUTO-GENERATED by uni_thesis.tex_bridge. DO NOT EDIT BY HAND.", ""]
     if not verified:
-        parts.append(r"No DOI-verified reference was retrieved for this topic.")
+        parts.append(_s(lang, "no_refs"))
         return "\n".join(parts) + "\n"
     parts.append(r"\begin{itemize}")
     for r in sorted(verified, key=lambda x: (x.year, x.cite_key)):
-        line = f"\\item \\citet{{{r.cite_key}}} ({latex_escape(r.venue)}): {latex_escape(r.methodology_tag)}."
+        colon, stop = ("：", "。") if lang == "zh" else (": ", ".")
+        line = f"\\item \\citet{{{r.cite_key}}} ({latex_escape(r.venue)}){colon}{latex_escape(r.methodology_tag)}{stop}"
         if r.limitation_note:
-            line += f" Reported limitation: {latex_escape(r.limitation_note)}"
+            line += _s(lang, "limitation") + latex_escape(r.limitation_note)
         parts.append(line)
     parts.append(r"\end{itemize}")
     return "\n".join(parts) + "\n"
@@ -656,7 +708,7 @@ def render_literature(records: Sequence[Any]) -> str:
 
 def generate_tex_artifacts(metrics_json_path: PathLike, out_dir: PathLike, proposed: Optional[str] = None,
                            metrics: Optional[Sequence[str]] = None, sig: int = 4, title: Optional[str] = None,
-                           raw_series: Optional[PathLike] = None) -> Dict[str, str]:
+                           raw_series: Optional[PathLike] = None, lang: str = "en") -> Dict[str, str]:
     """Verify ``metrics.json`` and write ``auto_metrics.tex`` + ``auto_tables.tex`` into ``out_dir``.
 
     ``metrics`` (default: every metric except runtime) selects table columns and the
@@ -664,18 +716,19 @@ def generate_tex_artifacts(metrics_json_path: PathLike, out_dir: PathLike, propo
     mpath = Path(metrics_json_path)
     bundle = ExperimentResultBundle.load(mpath)
     sha = file_sha256(mpath)
-    macros, ctx = build_macros(bundle, proposed, sig)
+    _s(lang, "method")
+    macros, ctx = build_macros(bundle, proposed, sig, lang)
     design, order = _raw_series_info(bundle, raw_series)
     groups = method_groups(bundle, list(design["points"]) if design else [], order)
     cols = list(metrics) if metrics else [m for m in _metric_names(bundle) if m != "runtime_s"] or _metric_names(bundle)
     _rsm_term_macros(bundle, macros, sig)
-    flags = _role_macros(bundle, macros, ctx, groups, cols[0], title, sig)
+    flags = _role_macros(bundle, macros, ctx, groups, cols[0], title, sig, lang)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     mp, tp = out / "auto_metrics.tex", out / "auto_tables.tex"
     mp.write_text(render_macros(macros, _header("auto_metrics.tex", sha, bundle)) + render_flags(flags),
                   encoding="utf-8")
-    tp.write_text(render_tables(bundle, ctx, _header("auto_tables.tex", sha, bundle), cols, design, sig, order),
+    tp.write_text(render_tables(bundle, ctx, _header("auto_tables.tex", sha, bundle), cols, design, sig, order, lang),
                   encoding="utf-8")
     return {"auto_metrics": str(mp), "auto_tables": str(tp), SHA_HEADER_KEY: sha, "proposed": ctx["proposed"],
             "n_macros": str(len(macros)), **{k: str(v).lower() for k, v in flags.items()}}

@@ -1,0 +1,29 @@
+\chapter{研究方法}
+\label{chap:method}
+
+\section{实验方案}
+研究的全部设置（数据来源、对比方法、评价指标、重复次数与随机种子）均在课题配置
+\texttt{\ThesisProfileId} 中声明。每种配置均进行独立重复试验，每次运行都记录在结果包中，
+并附带源代码提交号与输入数据的 SHA-256 摘要。
+
+\ifAutoHasRsm
+\section{响应面方法}
+采用由析因点、轴向点与重复中心点组成的中心复合设计考察各工艺因子，以二阶多项式
+\begin{equation}
+  \hat{y} = \beta_{0} + \sum_{i} \beta_{i} x_{i} + \sum_{i} \beta_{ii} x_{i}^{2}
+            + \sum_{i<j} \beta_{ij} x_{i} x_{j}
+\end{equation}
+描述响应，并用普通最小二乘法拟合。模型显著性由 $F$ 检验评估，充分性由相对纯误差的失拟检验评估，
+驻点性质则由二次型特征值判定。
+\fi
+
+\ifAutoHasAblation
+\section{消融设计}
+在相同条件下评估完整系统的累加式或逐一移除式配置，以分离各核心模块的贡献。
+\fi
+
+\section{统计分析}
+对每个指标，先以 Shapiro--Wilk 检验考察正态性、以 Levene 检验考察方差齐性。两组比较依据诊断结果
+路由至配对或 Student $t$ 检验、Welch $t$ 检验、Wilcoxon 符号秩检验或 Mann--Whitney $U$ 检验，
+并给出 Cohen's $d$ 或秩二列相关效应量；多组比较采用单因素方差分析加 Tukey HSD 事后检验，
+或 Kruskal--Wallis $H$ 检验。显著性标记的阈值见各表注。

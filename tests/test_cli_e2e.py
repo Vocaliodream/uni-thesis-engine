@@ -264,3 +264,37 @@ def test_crossref_author_names_are_sanitised(tmp_path):
     assert le._crossref_authors(msg) == ["Ameh, C. U.", "Lin Ma", "Consortium"]
     assert le._bib_author("A., B., C.") == "{A., B., C.}"
     assert le._bib_author("Smith, John,") == "Smith, John"
+
+
+# =============================================================== Chinese template
+HAS_XETEX = pl.find_tex_engine(None, ("xelatex", "lualatex")) is not None
+
+
+def test_chinese_template_run_and_pdf(tmp_path):
+    results = tmp_path / "res"
+    code = cli_main(["run", "--profile", str(PROFILES["demo_rsm_opt"]), "--results-dir", str(results),
+                     "--template-dir", str(REPO / "templates" / "thesis_tex_zh"), "--offline", "--no-mirror"])
+    assert code == 0
+    p = pl.ProfilePaths(results, "demo_rsm_opt")
+    manifest = json.loads((p.root / "run_manifest.json").read_text())
+    assert manifest["template"]["lang"] == "zh" and manifest["audit"]["passed"]
+    metrics_tex = (p.thesis / "generated" / "auto_metrics.tex").read_text(encoding="utf-8")
+    assert "\\providecommand{\\ThesisTitle}{多因子工艺参数响应面优化（RSM）与核心模块消融研究}" in metrics_tex
+    assert "\\providecommand{\\StatRsmPrimaryOptNature}{极大值点}" in metrics_tex
+    tables = (p.thesis / "generated" / "auto_tables.tex").read_text(encoding="utf-8")
+    assert "消融实验" in tables and "失拟项" in tables and "常数项" in tables and "（本文）" in tables
+    figs = (p.thesis / "generated" / "auto_figures.tex").read_text(encoding="utf-8")
+    assert "二阶响应面" in figs
+    if HAS_XETEX:
+        assert cli_main(["pdf", "--profile", str(PROFILES["demo_rsm_opt"]), "--results-dir", str(results)]) == 0
+        assert p.pdf.read_bytes()[:4] == b"%PDF"
+
+
+def test_language_validation(tmp_path):
+    (tmp_path / "template.json").write_text('{"lang": "fr"}')
+    with pytest.raises(ValueError, match="unsupported lang"):
+        pl.template_settings(tmp_path)
+    assert pl.template_settings(tmp_path / "missing") == {"lang": "en", "engine": ""}
+    with pytest.raises(ValueError, match="unsupported language"):
+        tb.render_literature([], lang="fr")
+    assert tb.render_literature([], lang="zh").strip().endswith("本课题未检索到经 DOI 核验的文献。")

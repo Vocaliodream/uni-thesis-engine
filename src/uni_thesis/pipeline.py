@@ -34,7 +34,8 @@ from .schema import ExperimentResultBundle, LiteratureRecord, TopicProfile
 from .stat_router import load_raw_samples, slice_response_surface
 from .tex_bridge import generate_tex_artifacts, method_groups, render_figures, render_literature
 
-__all__ = ["RunResult", "ProfilePaths", "run_profile", "audit_profile", "build_pdf", "find_tex_engine"]
+__all__ = ["RunResult", "ProfilePaths", "run_profile", "audit_profile", "build_pdf", "find_tex_engine",
+           "template_settings"]
 
 logger = logging.getLogger(__name__)
 PathLike = Union[str, Path]
@@ -111,6 +112,45 @@ def _literature(profile: TopicProfile, paths: ProfilePaths, offline: Optional[bo
 
 
 # --------------------------------------------------------------------------- #
+# Template settings
+# --------------------------------------------------------------------------- #
+_CAPTIONS = {
+    "en": {
+        "signal": "Time-domain and spectral comparison of the filters on the {ch} channel; legend entries report "
+                  "the cross-correlation phase delay.",
+        "ba": "Bland-Altman agreement between the clean {ch} reference and the {m} output (bias, limits of "
+              "agreement and their confidence bands).",
+        "bars": "{metric} across {what}: mean and SD with significance brackets versus the proposed "
+                "configuration, and per-run distributions.",
+        "comparison": "methods", "ablation": "ablation configurations",
+        "rsm": "Fitted second-order response surface and contour of {metric} over {a} and {b} ({held}); "
+               "the star marks the optimum.",
+        "held": "{n} held at its {kind} value", "stationary": "stationary", "central": "central",
+        "all": "all factors shown", "join": ", ",
+    },
+    "zh": {
+        "signal": "{ch} 通道上各滤波方案的时域与功率谱对比，图例给出互相关相位延迟。",
+        "ba": "{ch} 干净参考信号与 {m} 输出的 Bland-Altman 一致性分析（偏差、一致性界限及其置信带）。",
+        "bars": "{metric} 在{what}间的比较：均值与标准差及相对本文配置的显著性标注，以及逐次试验分布。",
+        "comparison": "各方法", "ablation": "各消融配置",
+        "rsm": "{metric} 关于 {a} 与 {b} 的二阶响应面及等高线（{held}），星号为最优点。",
+        "held": "{n} 固定于{kind}值", "stationary": "驻点", "central": "中心",
+        "all": "展示全部因子", "join": "，",
+    },
+}
+
+
+def template_settings(template_dir: PathLike) -> Dict[str, str]:
+    """``template.json`` beside ``main.tex``: ``{"lang": "en"|"zh", "engine": "pdflatex"|"xelatex"|...}``."""
+    path = Path(template_dir) / "template.json"
+    cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    lang = str(cfg.get("lang", "en"))
+    if lang not in _CAPTIONS:
+        raise ValueError(f"template.json: unsupported lang '{lang}'; choose from {sorted(_CAPTIONS)}")
+    return {"lang": lang, "engine": str(cfg.get("engine", ""))}
+
+
+# --------------------------------------------------------------------------- #
 # Step 4 - figures
 # --------------------------------------------------------------------------- #
 def _pairwise(bundle: ExperimentResultBundle, metric: str, methods: Sequence[str]) -> List[Dict[str, Any]]:
@@ -130,7 +170,9 @@ def _metric_label(bundle: ExperimentResultBundle, metric: str) -> str:
     return metric.replace("_", " ") + (f" ({unit})" if unit else "")
 
 
-def _make_figures(profile: TopicProfile, bundle: ExperimentResultBundle, paths: ProfilePaths) -> List[Dict[str, Any]]:
+def _make_figures(profile: TopicProfile, bundle: ExperimentResultBundle, paths: ProfilePaths,
+                  lang: str = "en") -> List[Dict[str, Any]]:
+    cap = _CAPTIONS[lang]
     paths.figures.mkdir(parents=True, exist_ok=True)
     npz = Path(bundle.artifacts_paths["raw_series"])
     samples, design = load_raw_samples(npz)
@@ -154,17 +196,15 @@ def _make_figures(profile: TopicProfile, bundle: ExperimentResultBundle, paths: 
             res = ff.plot_signal_comparison(arr["t"], clean, pretty, fs, paths.figures / f"signal_{tag}", noisy=noisy,
                                             ref_label="Clean reference")
             figs.append({**res, "name": f"signal_{tag}", "label": f"fig:auto-signal-{tag}",
-                         "caption": f"Time-domain and spectral comparison of the filters on the {tag.upper()} channel; "
-                                    "legend entries report the cross-correlation phase delay."})
+                         "caption": cap["signal"].format(ch=tag.upper())})
             if proposed in outs:
                 res = ff.plot_bland_altman(clean, outs[proposed], paths.figures / f"bland_altman_{tag}",
                                            label_ref="Reference", label_meas=proposed.replace("_", " "))
                 figs.append({**res, "name": f"bland_altman_{tag}", "label": f"fig:auto-bland-altman-{tag}",
-                             "caption": f"Bland-Altman agreement between the clean {tag.upper()} reference and the "
-                                        f"{proposed.replace('_', ' ')} output (bias, limits of agreement and their "
-                                        "confidence bands).", "width": "0.62"})
+                             "caption": cap["ba"].format(ch=tag.upper(), m=proposed.replace("_", " ")),
+                             "width": "0.62"})
 
-    for group, title in (("comparison", "methods"), ("ablation", "ablation configurations")):
+    for group in ("comparison", "ablation"):
         methods = groups[group]
         if len(methods) < 2:
             continue
@@ -172,8 +212,7 @@ def _make_figures(profile: TopicProfile, bundle: ExperimentResultBundle, paths: 
         res = ff.plot_ablation_and_baselines(data, paths.figures / f"{group}_{primary}", _metric_label(bundle, primary),
                                              tests=_pairwise(bundle, primary, methods))
         figs.append({**res, "name": f"{group}_{primary}", "label": f"fig:auto-{group}",
-                     "caption": f"{primary.replace('_', ' ')} across {title}: mean and SD with significance "
-                                "brackets versus the proposed configuration, and per-run distributions."})
+                     "caption": cap["bars"].format(metric=primary.replace("_", " "), what=cap[group])})
 
     rsm = next((t for t in bundle.statistical_tests
                 if t.get("comparison") == "response_surface" and t["metric"] == primary), None)
@@ -195,12 +234,12 @@ def _make_figures(profile: TopicProfile, bundle: ExperimentResultBundle, paths: 
         res = ff.plot_response_surface(model, {k: bounds[k] for k in keep}, paths.figures / f"response_surface_{primary}",
                                        response_label=primary.replace("_", " "), maximize=maximize,
                                        observed=(pts, resp))
-        held = ", ".join(f"{n.replace('_', ' ')} held at its {'stationary' if inside else 'central'} value"
-                         for n in fixed) or "all factors shown"
+        held = cap["join"].join(cap["held"].format(n=n.replace("_", " "),
+                                                   kind=cap["stationary"] if inside else cap["central"])
+                                for n in fixed) or cap["all"]
         figs.append({**res, "name": f"response_surface_{primary}", "label": "fig:auto-rsm",
-                     "caption": f"Fitted second-order response surface and contour of {primary.replace('_', ' ')} "
-                                f"over {keep[0].replace('_', ' ')} and {keep[1].replace('_', ' ')} ({held}); "
-                                "the star marks the optimum."})
+                     "caption": cap["rsm"].format(metric=primary.replace("_", " "), a=keep[0].replace("_", " "),
+                                                  b=keep[1].replace("_", " "), held=held)})
     return figs
 
 
@@ -212,7 +251,7 @@ def _escape_caption(text: str) -> str:
 
 
 def _assemble_thesis(profile: TopicProfile, paths: ProfilePaths, template_dir: Path, records: Sequence[LiteratureRecord],
-                     figs: Sequence[Mapping[str, Any]], mirror_generated: bool) -> Dict[str, str]:
+                     figs: Sequence[Mapping[str, Any]], mirror_generated: bool, lang: str = "en") -> Dict[str, str]:
     if not (template_dir / "main.tex").exists():
         raise FileNotFoundError(f"thesis template not found: {template_dir / 'main.tex'}")
     if paths.thesis.exists():
@@ -220,7 +259,8 @@ def _assemble_thesis(profile: TopicProfile, paths: ProfilePaths, template_dir: P
     shutil.copytree(template_dir, paths.thesis, ignore=shutil.ignore_patterns("generated", "*.aux", "*.log", "*.pdf"))
     gen = paths.thesis / "generated"
     info = generate_tex_artifacts(paths.metrics, gen, proposed=profile.proposed_method,
-                                  metrics=profile.metrics_target, title=profile.title)
+                                  metrics=profile.metrics_target,
+                                  title=(profile.title_zh or profile.title) if lang == "zh" else profile.title, lang=lang)
     fig_dir = paths.thesis / "figures"
     fig_dir.mkdir(exist_ok=True)
     entries = []
@@ -229,7 +269,7 @@ def _assemble_thesis(profile: TopicProfile, paths: ProfilePaths, template_dir: P
         entries.append({"path": f"figures/{Path(f['pdf']).name}", "caption": _escape_caption(f["caption"]),
                         "label": f["label"], "width": f.get("width", "1.0")})
     (gen / "auto_figures.tex").write_text(render_figures(entries), encoding="utf-8")
-    (gen / "auto_literature.tex").write_text(render_literature(records), encoding="utf-8")
+    (gen / "auto_literature.tex").write_text(render_literature(records, lang), encoding="utf-8")
     export_bibtex(records, paths.bib)
     if mirror_generated:
         target = template_dir / "generated"
@@ -254,6 +294,7 @@ def run_profile(profile_path: PathLike, results_dir: PathLike = "results",
     profile = TopicProfile.from_yaml(profile_path)
     paths = ProfilePaths(Path(results_dir), profile.profile_id)
     paths.root.mkdir(parents=True, exist_ok=True)
+    lang = template_settings(template_dir)["lang"]
     timings: Dict[str, float] = {}
 
     t0 = time.perf_counter()
@@ -268,11 +309,11 @@ def run_profile(profile_path: PathLike, results_dir: PathLike = "results",
     timings["experiments_and_statistics"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    figs = _make_figures(profile, bundle, paths)
+    figs = _make_figures(profile, bundle, paths, lang)
     timings["figures"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    tex = _assemble_thesis(profile, paths, Path(template_dir), records, figs, mirror_generated)
+    tex = _assemble_thesis(profile, paths, Path(template_dir), records, figs, mirror_generated, lang)
     timings["latex"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -290,6 +331,7 @@ def run_profile(profile_path: PathLike, results_dir: PathLike = "results",
         "figures": [{"name": f["name"], "png": f["png"], "pdf": f["pdf"]} for f in figs],
         "tex": {k: v for k, v in tex.items()},
         "thesis_dir": str(paths.thesis),
+        "template": {"dir": str(template_dir), "lang": lang},
         "audit": report.to_dict(),
         "timings_s": {k: round(v, 3) for k, v in timings.items()},
     }
@@ -298,8 +340,10 @@ def run_profile(profile_path: PathLike, results_dir: PathLike = "results",
     return RunResult(profile.profile_id, bundle, records, figs, tex, report, manifest_path, timings)
 
 
-def find_tex_engine(preferred: Optional[str] = None) -> Optional[str]:
-    for engine in ([preferred] if preferred else []) + ["pdflatex", "xelatex", "lualatex"]:
+def find_tex_engine(preferred: Optional[str] = None,
+                    candidates: Sequence[str] = ("pdflatex", "xelatex", "lualatex")) -> Optional[str]:
+    """``preferred`` if installed, else the first installed of ``candidates``."""
+    for engine in ([preferred] if preferred else []) + list(candidates):
         if engine and shutil.which(engine):
             return engine
     return None
@@ -311,9 +355,11 @@ def build_pdf(profile: TopicProfile, results_dir: PathLike = "results", engine: 
     paths = ProfilePaths(Path(results_dir), profile.profile_id)
     if not (paths.thesis / "main.tex").exists():
         raise FileNotFoundError(f"{paths.thesis / 'main.tex'} missing; run `uni-thesis run` first")
-    exe = find_tex_engine(engine)
+    settings = template_settings(paths.thesis)
+    candidates = ("xelatex", "lualatex") if settings["lang"] == "zh" else ("pdflatex", "xelatex", "lualatex")
+    exe = find_tex_engine(engine or settings["engine"] or None, candidates)
     if exe is None:
-        raise RuntimeError("no LaTeX engine (pdflatex/xelatex/lualatex) found on PATH")
+        raise RuntimeError(f"no LaTeX engine found on PATH (tried {engine or settings['engine'] or ''} {', '.join(candidates)})")
 
     def _run(cmd: List[str]) -> subprocess.CompletedProcess:
         return subprocess.run(cmd, cwd=paths.thesis, capture_output=True, text=True, timeout=timeout)

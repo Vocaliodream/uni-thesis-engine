@@ -1,0 +1,30 @@
+# 再生骨料混凝土配合比响应面优化 —— README 教程示例（约 30 行即可接入一个新课题）
+profile_id: tutorial_concrete_mix
+title: Response Surface Optimisation of Recycled-Aggregate Concrete Mix Design
+title_zh: 再生骨料混凝土配合比响应面优化研究
+domain_type: parameter_optimization
+literature_query:
+  keywords: [recycled aggregate concrete, compressive strength, response surface methodology, mix design]
+  start_year: 2000
+  max_papers: 6
+data_config:
+  factor_ranges:
+    water_cement_ratio: {low: 0.35, high: 0.55}
+    recycled_pct: {low: 0, high: 60}
+  simulator:
+    name: analytic_response_surface      # 或在 plugins/*.py 中用 @register_objective 注册自己的模型
+    params:
+      metric_name: strength_mpa
+      intercept: 20.0
+      linear: {water_cement_ratio: 120.0, recycled_pct: 0.05}
+      quadratic: {water_cement_ratio: -160.0, recycled_pct: -0.002}
+      interaction: {"water_cement_ratio*recycled_pct": -0.1}
+      noise_std: 0.6
+design:
+  kind: ccd
+  center_points: 5
+baselines: [center]                    # 设计点标签；RSM 课题的对照为中心点
+metrics_target: [strength_mpa]
+metrics_direction: {strength_mpa: max}
+random_seed: 42
+n_repeats: 3

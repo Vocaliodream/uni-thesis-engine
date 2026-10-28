@@ -36,3 +36,8 @@
 - `uni-thesis audit --profile ...` 单独审计；`uni-thesis pdf --profile ...` 编译 `results/<profile_id>/thesis.pdf`。
 - 示范课题：`profiles/demo_biosignal.yaml`（ECG/PPG 零相位滤波）、`profiles/demo_rsm_opt.yaml`（三因子 CCD 响应面 + 四阶段消融）。
 - 中文模板：`uni-thesis run --profile ... --template-dir templates/thesis_tex_zh` 后 `uni-thesis pdf --profile ...`（模板内 `template.json` 指定 `lang: zh`、`engine: xelatex`；ctex + TeX Live 自带开源 Fandol 字体）。课题配置可选 `title_zh` 作为中文题目；表题、图注、文献摘要随模板语言自动切换。
+
+## Step 6 工程化门禁
+- `make init | test | run PROFILE=... | audit | audit-fresh | pdf PROFILE=... | all`
+- `scripts/install_hooks.sh` 注册 `.git/hooks/pre-commit`：pytest（覆盖率 ≥ 90%）+ `scripts/audit_anti_hallucination.py`（无参数 = 离线重建全部 profile × 全部模板后审计；`--results-dir results` = 审计已有结果）。
+- `.github/workflows/ci.yml`：`test-and-audit` → `build-thesis-pdf`（Artifact：thesis_biosignal.pdf、thesis_rsm.pdf、figures_600dpi.zip；`v*` 标签发布 Release）。

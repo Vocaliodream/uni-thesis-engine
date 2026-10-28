@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "uni-thesis-engine"
 version = "0.1.0"
 description = "Topic-agnostic thesis automation engine with strict data provenance"
-readme = "AGENT_SPEC.md"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "numpy",

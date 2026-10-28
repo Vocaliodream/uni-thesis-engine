@@ -1,0 +1,121 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHONUNBUFFERED: "1"
+  MPLBACKEND: Agg
+
+jobs:
+  test-and-audit:
+    name: test-and-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Tests + coverage floor
+        run: python -m pytest -v -W error --cov=src/uni_thesis --cov-report=term-missing --cov-fail-under=90
+
+      - name: Run built-in profiles (online literature, signed-cache fallback)
+        run: |
+          for p in profiles/demo_biosignal.yaml profiles/demo_rsm_opt.yaml; do
+            echo "::group::run $p"
+            uni-thesis run --profile "$p" --no-mirror \
+              || { echo "::warning::online literature lookup failed for $p, falling back to signed caches"; \
+                   uni-thesis run --profile "$p" --no-mirror --offline; }
+            echo "::endgroup::"
+          done
+
+      - name: Anti-hallucination audit (generated theses)
+        run: python scripts/audit_anti_hallucination.py --results-dir results
+
+      - name: Anti-hallucination audit (hermetic regeneration, all templates)
+        run: python scripts/audit_anti_hallucination.py
+
+  build-thesis-pdf:
+    name: build-thesis-pdf
+    needs: test-and-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install lightweight TeX Live
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            texlive-latex-base texlive-latex-recommended texlive-latex-extra \
+            texlive-fonts-recommended texlive-science
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run pipeline and compile theses (pdflatex + bibtex)
+        run: |
+          set -euo pipefail
+          mkdir -p dist/figures
+          build() {
+            local profile="$1" id="$2" short="$3"
+            uni-thesis run --profile "$profile" --no-mirror \
+              || uni-thesis run --profile "$profile" --no-mirror --offline
+            uni-thesis pdf --profile "$profile" --engine pdflatex
+            cp "results/$id/thesis.pdf" "dist/thesis_${short}.pdf"
+            mkdir -p "dist/figures/$id"
+            cp results/$id/figures/*.png results/$id/figures/*.pdf "dist/figures/$id/"
+          }
+          build profiles/demo_biosignal.yaml demo_biosignal biosignal
+          build profiles/demo_rsm_opt.yaml demo_rsm_opt rsm
+          (cd dist && zip -qr figures_600dpi.zip figures)
+          ls -l dist
+
+      - name: Upload theses and figure pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: thesis-pdfs-${{ github.sha }}
+          path: |
+            dist/thesis_biosignal.pdf
+            dist/thesis_rsm.pdf
+            dist/figures_600dpi.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/thesis_biosignal.pdf
+            dist/thesis_rsm.pdf
+            dist/figures_600dpi.zip
+          generate_release_notes: true

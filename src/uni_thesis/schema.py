@@ -166,6 +166,7 @@ class TopicProfile(_StrictModel):
     metrics_direction: Dict[StrictStr, Literal["max", "min", "min_abs"]] = Field(default_factory=dict)
     design: Optional[ExperimentDesign] = None
     ablation: Optional[AblationConfig] = None
+    proposed_method: Optional[StrictStr] = None
 
     @field_validator("profile_id")
     @classmethod

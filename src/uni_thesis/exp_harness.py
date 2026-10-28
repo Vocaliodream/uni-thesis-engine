@@ -26,7 +26,6 @@ import math
 import subprocess
 import sys
 import time
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Type, Union
@@ -36,6 +35,7 @@ import pandas as pd
 from scipy import signal as sps
 from scipy import stats
 
+from .stat_router import StatisticalRouter
 from .schema import ExperimentDesign, ExperimentResultBundle, FactorRange, MetricItem, TopicProfile
 
 __all__ = [
@@ -366,34 +366,6 @@ def _mark_best(methods_metrics: Dict[str, Dict[str, MetricItem]], directions: Ma
                 methods_metrics[meth][metric] = item.model_copy(update={"is_best": True})
 
 
-def _paired_tests(raw: Mapping[str, Mapping[str, Sequence[float]]], methods_metrics: Mapping[str, Mapping[str, MetricItem]],
-                  metrics: Sequence[str]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for metric in metrics:
-        best = [m for m, mm in methods_metrics.items() if metric in mm and mm[metric].is_best]
-        if not best:
-            continue
-        ref = best[0]
-        for other in methods_metrics:
-            if other == ref or metric not in raw[other]:
-                continue
-            a, b = np.asarray(raw[ref][metric], float), np.asarray(raw[other][metric], float)
-            if a.size < 2 or np.allclose(a - b, 0.0):
-                continue
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                res = stats.wilcoxon(a, b, zero_method="wilcox", alternative="two-sided")
-            p = float(res.pvalue)
-            if not math.isfinite(p):
-                continue
-            out.append({
-                "test": "wilcoxon_signed_rank", "metric": metric, "method_a": ref, "method_b": other,
-                "n": int(a.size), "statistic": float(res.statistic), "p_value": min(max(p, 0.0), 1.0),
-                "notes": sorted({str(w.message) for w in caught}),
-            })
-    return out
-
-
 # --------------------------------------------------------------------------- #
 # Design of experiments
 # --------------------------------------------------------------------------- #
@@ -640,12 +612,24 @@ class ExperimentHarness:
     schema-valid ``ExperimentResultBundle`` plus raw ``.npz`` series."""
 
     def __init__(self, profile: TopicProfile, results_dir: Union[str, Path] = "results",
-                 repo_root: Union[str, Path, None] = None, plugin_dir: Union[str, Path, None] = None):
+                 repo_root: Union[str, Path, None] = None, plugin_dir: Union[str, Path, None] = None,
+                 alpha: float = 0.05):
         self.profile = profile
+        self.alpha = alpha
         self.results_dir = Path(results_dir)
         self.repo_root = Path(repo_root) if repo_root else None
         if plugin_dir is not None:
             load_plugins(plugin_dir)
+
+    def _proposed(self, methods_metrics: Mapping[str, Mapping[str, MetricItem]]) -> str:
+        """The profile's ``proposed_method``, else the best method on the first target metric."""
+        if self.profile.proposed_method is not None:
+            if self.profile.proposed_method not in methods_metrics:
+                raise KeyError(f"proposed_method '{self.profile.proposed_method}' not among {list(methods_metrics)}")
+            return self.profile.proposed_method
+        first = self.profile.metrics_target[0]
+        best = [m for m, mm in methods_metrics.items() if first in mm and mm[first].is_best]
+        return best[0] if best else next(iter(methods_metrics))
 
     @property
     def output_dir(self) -> Path:
@@ -669,7 +653,15 @@ class ExperimentHarness:
             for method, metrics in out.raw.items()
         }
         _mark_best(methods_metrics, directions)
-        tests = _paired_tests(out.raw, methods_metrics, p.metrics_target)
+        proposed = self._proposed(methods_metrics)
+        design = None
+        if "design_matrix" in out.arrays:
+            names = [str(n) for n in out.arrays["factor_names"]]
+            labels = [str(l) for l in out.arrays["config_labels"]]
+            design = {"factor_names": names,
+                      "points": {lab: [float(v) for v in row] for lab, row in zip(labels, out.arrays["design_matrix"])}}
+        tests = StatisticalRouter(self.alpha).analyze(out.raw, p.metrics_target, proposed,
+                                                      paired=(p.domain_type == "signal_processing"), design=design)
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         npz_path = self.output_dir / "raw_series.npz"

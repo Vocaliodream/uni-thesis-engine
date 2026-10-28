@@ -48,13 +48,24 @@ __all__ = [
     "export_bibtex",
     "export_literature_matrix",
     "make_cite_key",
+    "contact_email",
+    "polite_user_agent",
+    "extract_limitations",
+    "DEFAULT_CONTACT_EMAIL",
+    "PENDING_REVIEW",
 ]
 
 logger = logging.getLogger(__name__)
 
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 CROSSREF_WORKS_URL = "https://api.crossref.org/works/"
-_USER_AGENT = "uni-thesis-engine/0.1 (https://github.com/Vocaliodream/uni-thesis-engine)"
+_USER_AGENT_PRODUCT = "uni-thesis-engine/0.1"
+DEFAULT_CONTACT_EMAIL = "agent@uni-thesis-engine.org"
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PENDING_REVIEW = "待人工补充（Pending manual review）"
+_LIMITATION_TAG = "[Extracted from Abstract]"
+_LIMITATION_CUES = re.compile(r"\b(limit\w*|however|challeng\w*|drawbacks?|future|bottlenecks?)\b", re.IGNORECASE)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(\[])")
 _DOI_STRICT_RE = re.compile(r"^10\.\d{4,9}/[-._;()/:<>A-Za-z0-9\[\]]+$")
 _DOI_PREFIXES = ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/", "doi:")
 _TITLE_SIMILARITY_MIN = 0.90
@@ -120,13 +131,24 @@ def _family_name(full_name: str) -> str:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+def contact_email() -> str:
+    """Contact address for the OpenAlex / Crossref polite pools.
+
+    Reads ``RESEARCH_CONTACT_EMAIL``; falls back to ``DEFAULT_CONTACT_EMAIL``
+    when unset or malformed."""
+    email = os.environ.get("RESEARCH_CONTACT_EMAIL", "").strip()
+    return email if _EMAIL_RE.match(email) else DEFAULT_CONTACT_EMAIL
+
+
+def polite_user_agent() -> str:
+    return f"{_USER_AGENT_PRODUCT} (mailto:{contact_email()})"
+
+
 def _session(session: Optional[SessionLike]) -> SessionLike:
     if session is not None:
         return session
     s = requests.Session()
-    mailto = os.environ.get("UNI_THESIS_MAILTO")
-    ua = f"{_USER_AGENT[:-1]}; mailto:{mailto})" if mailto else _USER_AGENT
-    s.headers.update({"User-Agent": ua, "Accept": "application/json"})
+    s.headers.update({"User-Agent": polite_user_agent(), "Accept": "application/json"})
     return s
 
 
@@ -223,7 +245,8 @@ def fetch_crossref_metadata(doi: str, session: Optional[SessionLike] = None) -> 
     if not is_valid_doi_format(doi):
         return None
     s = _session(session)
-    status, data = _get_json(s, CROSSREF_WORKS_URL + quote(normalize_doi(doi), safe="/"))
+    status, data = _get_json(s, CROSSREF_WORKS_URL + quote(normalize_doi(doi), safe="/"),
+                             {"mailto": contact_email()})
     if status != 200 or not data or "message" not in data:
         return None
     return _parse_crossref_item(data["message"])
@@ -268,13 +291,14 @@ def search_openalex(query: LiteratureQuery, per_page: int, session: Optional[Ses
         "filter": f"from_publication_date:{query.start_year}-01-01,has_doi:true",
         "per-page": max(1, min(per_page, 200)),
         "sort": "relevance_score:desc",
+        "mailto": contact_email(),
     }
     api_key = os.environ.get("OPENALEX_API_KEY")
     if api_key:
         params["api_key"] = api_key
     status, data = _get_json(s, OPENALEX_WORKS_URL, params)
     if status != 200 or not data:
-        logger.warning("OpenAlex search unavailable (HTTP %s)", status)
+        logger.warning("OpenAlex search unavailable (HTTP %s); degrading to Crossref only", status)
         return []
     return [_parse_openalex_item(w) for w in data.get("results") or []]
 
@@ -286,6 +310,7 @@ def search_crossref(query: LiteratureQuery, rows: int, session: Optional[Session
         "filter": f"from-pub-date:{query.start_year}-01-01",
         "rows": max(1, min(rows, 1000)),
         "select": "DOI,title,author,issued,published-print,published-online,container-title,type,abstract,subject,publisher",
+        "mailto": contact_email(),
     }
     status, data = _get_json(s, CROSSREF_WORKS_URL.rstrip("/"), params)
     if status != 200 or not data:
@@ -314,6 +339,20 @@ def make_cite_key(authors: Sequence[str], year: int, title: str, taken: Optional
     return key
 
 
+def extract_limitations(abstract: str) -> str:
+    """Return verbatim abstract sentences that state a limitation, tagged
+    ``[Extracted from Abstract]``; empty string when there is no abstract or no
+    sentence contains a limitation cue.  Never paraphrases or invents text."""
+    if not abstract or not abstract.strip():
+        return ""
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", abstract)).strip()
+    text = re.sub(r"^(abstract|summary)[:.\s]+", "", text, flags=re.IGNORECASE)
+    hits = [sent.strip() for sent in _SENTENCE_SPLIT.split(text) if _LIMITATION_CUES.search(sent)]
+    if not hits:
+        return ""
+    return f"{_LIMITATION_TAG} " + " ".join(hits)
+
+
 def _detect_metrics(text: str, vocabulary: Iterable[str]) -> List[str]:
     norm = f" {_normalize_text(text)} "
     found = []
@@ -334,7 +373,7 @@ def _to_record(meta: Mapping[str, Any], cite_key: str, metric_vocabulary: Sequen
         doi=meta["doi"],
         venue=meta["venue"] or "Unknown venue",
         methodology_tag=subjects[0] if subjects else f"unclassified ({meta.get('type') or 'unknown type'})",
-        limitation_note="",
+        limitation_note=extract_limitations(meta.get("abstract", "")),
         core_metrics=_detect_metrics(f"{meta['title']} {meta.get('abstract', '')}", metric_vocabulary),
         verified=True,
     )
@@ -519,7 +558,7 @@ def export_bibtex(records: Sequence[LiteratureRecord], path: Union[str, Path]) -
 
 
 _MATRIX_COLUMNS = ["CiteKey", "Year", "Methodology", "CoreMetrics", "Limitations"]
-_UNANNOTATED = "未标注（需人工阅读后补充）"
+_UNANNOTATED = PENDING_REVIEW
 
 
 def _md_cell(text: str) -> str:

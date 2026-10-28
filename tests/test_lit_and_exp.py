@@ -341,7 +341,9 @@ def test_ablation_metrics_are_complete(tmp_path):
         assert metrics["runtime_s"].mean >= 0
     assert mm["full"]["accuracy"].is_best
     assert mm["full"]["accuracy"].mean > mm["w/o A"]["accuracy"].mean > mm["baseline"]["accuracy"].mean
-    assert {t["method_b"] for t in bundle.statistical_tests} == {"w/o A", "w/o B", "baseline"}
+    pairwise = [t for t in bundle.statistical_tests if t.get("comparison") == "pairwise"]
+    assert {t["method_b"] for t in pairwise} == {"w/o A", "w/o B", "baseline"}
+    assert all(t["method_a"] == "full" and not t["paired"] for t in pairwise)
 
 
 def test_ccd_and_grid_designs(tmp_path):

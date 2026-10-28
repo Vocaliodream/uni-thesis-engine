@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uni-thesis-engine"
+version = "0.1.0"
+description = "Topic-agnostic thesis automation engine with strict data provenance"
+readme = "AGENT_SPEC.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "pydantic>=2.0",
+    "pyyaml",
+    "requests",
+    "pytest",
+    "pytest-cov",
+]
+
+[project.scripts]
+uni-thesis = "uni_thesis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

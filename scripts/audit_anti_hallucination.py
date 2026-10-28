@@ -28,8 +28,11 @@ def main(argv=None) -> int:
     ap.add_argument("--metrics", required=True)
     ap.add_argument("--lit-cache", default=None)
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
+    ap.add_argument("--strict-integers", action="store_true",
+                    help="also flag integers other than 0, 1, 2, 3, 100 and years")
     args = ap.parse_args(argv)
-    report = run_anti_hallucination_audit(args.tex_dir, args.bib, args.metrics, args.lit_cache)
+    report = run_anti_hallucination_audit(args.tex_dir, args.bib, args.metrics, args.lit_cache,
+                                          strict_integers=args.strict_integers)
     print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False) if args.json else report.format())
     return 0 if report.passed else 1
 

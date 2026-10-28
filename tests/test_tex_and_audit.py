@@ -204,14 +204,17 @@ def test_raw_numbers_are_blocked_with_file_and_line(ablation_run, tmp_path):
     paths = _thesis(tmp_path, _copy_run(ablation_run, tmp_path), body)
     report = run_anti_hallucination_audit(**paths)
     raw = report.by_gate("raw_number")
-    assert not report.passed and len(raw) == 6
+    assert not report.passed and len(raw) == 5
     assert all(v.file == "chapters/chap4_experiments.tex" for v in raw)
     base = COMPLIANT_CHAP4.count("\n")
     assert {v.line for v in raw} == {base + 1, base + 2, base + 3}
     joined = " ".join(v.message for v in raw)
-    for token in ("24.85", "98.5\\%", "p < 0.05", "0.042", "12.3", "'42'"):
+    for token in ("24.85", "98.5\\%", "p < 0.05", "0.042", "12.3"):
         assert token in joined, token
+    assert "'42'" not in joined                       # plain counts pass by default
     assert not report.by_gate("citation") and not report.by_gate("provenance")
+    strict = run_anti_hallucination_audit(**paths, strict_integers=True).by_gate("raw_number")
+    assert len(strict) == 6 and any("'42'" in v.message for v in strict)
 
 
 def test_scan_raw_numbers_ignores_references_and_comments(tmp_path):
@@ -220,9 +223,12 @@ def test_scan_raw_numbers_ignores_references_and_comments(tmp_path):
                  "\\vspace{12pt} \\includegraphics[scale=0.45]{a.png} % 77.7\n"
                  "In 2024 we used $\\alpha_{12}$ only.\n")
     assert scan_raw_numbers(f) == []
-    f.write_text("freq 50.5 Hz and Sec 7 then 1e-3\n")
+    f.write_text("freq 50.5 Hz and Sec 7 then 1e-3 with 42 subjects\n")
     msgs = [v.message for v in scan_raw_numbers(f)]
-    assert any("50.5" in m for m in msgs) and any("1e-3" in m for m in msgs) and not any("'7'" in m for m in msgs)
+    assert any("50.5" in m for m in msgs) and any("1e-3" in m for m in msgs)
+    assert not any("'7'" in m or "'42'" in m for m in msgs)
+    strict = [v.message for v in scan_raw_numbers(f, strict_integers=True)]
+    assert any("'42'" in m for m in strict) and not any("'7'" in m for m in strict)
 
 
 def test_fake_citation_is_blocked(ablation_run, tmp_path):

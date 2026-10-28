@@ -3,7 +3,8 @@
 Three gates:
 
 1. **Raw Number Gate** – results chapters may not contain hand-written numbers
-   (floats, percentages, p-values, uncommon integers); every figure must come
+   (floats, percentages, p-values, scientific notation; integers only in
+   ``strict_integers`` mode); every figure must come
    from an ``\\Metric...`` / ``\\Stat...`` / ``\\Diff...`` macro.  Figure, table,
    section and equation references, labels, lengths and sub/superscript
    indices are ignored.
@@ -116,7 +117,14 @@ def _rel(path: Path, root: Path) -> str:
 # --------------------------------------------------------------------------- #
 def scan_raw_numbers(tex_path: PathLike, root: Optional[PathLike] = None,
                      allowed_integers: Iterable[int] = DEFAULT_ALLOWED_INTEGERS,
-                     allow_years: bool = True) -> List[Violation]:
+                     allow_years: bool = True, strict_integers: bool = False) -> List[Violation]:
+    """Flag hand-written result numbers in one chapter.
+
+    Floats, percentages (other than allowed integers), p-value expressions and
+    scientific notation are always flagged.  Plain integers (counts such as
+    subjects, folds or repeats) pass unless ``strict_integers`` is set, in which
+    case only ``allowed_integers`` and, with ``allow_years``, 4-digit years pass.
+    """
     path = Path(tex_path)
     rel = _rel(path, Path(root)) if root else str(path)
     allowed = set(allowed_integers)
@@ -142,7 +150,7 @@ def scan_raw_numbers(tex_path: PathLike, root: Optional[PathLike] = None,
             tok = m.group(1)
             if re.fullmatch(r"\d+", tok):
                 n = int(tok)
-                if n in allowed or (allow_years and _YEAR.match(tok)):
+                if not strict_integers or n in allowed or (allow_years and _YEAR.match(tok)):
                     continue
                 flagged.append(f"hand-written integer '{tok}'")
             else:
@@ -272,7 +280,8 @@ def check_provenance(tex_dir: Path, metrics_json_path: Path, tex_files: Sequence
 def run_anti_hallucination_audit(tex_dir: PathLike, bib_path: PathLike, metrics_json_path: PathLike,
                                  lit_cache_path: Optional[PathLike] = None,
                                  result_chapters: Sequence[str] = DEFAULT_RESULT_CHAPTERS,
-                                 allowed_integers: Iterable[int] = DEFAULT_ALLOWED_INTEGERS) -> AuditReport:
+                                 allowed_integers: Iterable[int] = DEFAULT_ALLOWED_INTEGERS,
+                                 strict_integers: bool = False) -> AuditReport:
     """Run all three gates.  ``lit_cache_path`` defaults to ``lit_cache.json`` next to ``metrics.json``."""
     root = Path(tex_dir)
     mjson = Path(metrics_json_path)
@@ -284,7 +293,7 @@ def run_anti_hallucination_audit(tex_dir: PathLike, bib_path: PathLike, metrics_
     for chap in result_chapters:
         p = root / chap
         if p.exists():
-            report.violations += scan_raw_numbers(p, root, allowed_integers)
+            report.violations += scan_raw_numbers(p, root, allowed_integers, strict_integers=strict_integers)
         else:
             report.violations.append(Violation("raw_number", chap, 0, "results chapter not found"))
 

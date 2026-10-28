@@ -34,6 +34,8 @@ __all__ = [
     "SimulatorConfig",
     "FactorRange",
     "DataConfig",
+    "ExperimentDesign",
+    "AblationConfig",
     "TopicProfile",
     "LiteratureRecord",
     "MetricItem",
@@ -128,6 +130,28 @@ class DataConfig(_StrictModel):
         return self
 
 
+class ExperimentDesign(_StrictModel):
+    """Design of experiments for multi-factor evaluation."""
+
+    kind: Literal["grid", "ccd"] = "grid"
+    ccd_alpha: Optional[Number] = Field(default=None, gt=0)
+    center_points: StrictInt = Field(default=1, ge=1)
+
+
+class AblationConfig(_StrictModel):
+    """Component-removal ablation: Full vs. w/o each module vs. Baseline."""
+
+    modules: List[StrictStr] = Field(min_length=1)
+    include_baseline: StrictBool = True
+
+    @field_validator("modules")
+    @classmethod
+    def _unique_modules(cls, v: List[str]) -> List[str]:
+        if any(not m.strip() for m in v) or len(set(v)) != len(v):
+            raise ValueError("ablation modules must be unique and non-blank")
+        return v
+
+
 class TopicProfile(_StrictModel):
     profile_id: StrictStr
     title: StrictStr = Field(min_length=1)
@@ -137,6 +161,11 @@ class TopicProfile(_StrictModel):
     baselines: List[StrictStr] = Field(min_length=1)
     metrics_target: List[StrictStr] = Field(min_length=1)
     random_seed: StrictInt = Field(ge=0, le=2**32 - 1)
+    n_repeats: StrictInt = Field(default=1, ge=1, le=10000)
+    method_params: Dict[StrictStr, Dict[StrictStr, Any]] = Field(default_factory=dict)
+    metrics_direction: Dict[StrictStr, Literal["max", "min", "min_abs"]] = Field(default_factory=dict)
+    design: Optional[ExperimentDesign] = None
+    ablation: Optional[AblationConfig] = None
 
     @field_validator("profile_id")
     @classmethod
@@ -160,6 +189,8 @@ class TopicProfile(_StrictModel):
             raise ValueError("signal_processing profiles require data_config.sampling_rate_hz")
         if self.domain_type == "parameter_optimization" and not self.data_config.factor_ranges:
             raise ValueError("parameter_optimization profiles require data_config.factor_ranges")
+        if self.domain_type == "ablation_study" and self.ablation is None:
+            raise ValueError("ablation_study profiles require an ablation config")
         return self
 
     @classmethod
@@ -183,6 +214,7 @@ class LiteratureRecord(_StrictModel):
     venue: StrictStr = Field(min_length=1)
     methodology_tag: StrictStr = Field(min_length=1)
     limitation_note: StrictStr = ""
+    core_metrics: List[StrictStr] = Field(default_factory=list)
     verified: StrictBool = False
 
     @field_validator("cite_key")

@@ -26,6 +26,10 @@ uni-thesis = "uni_thesis.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+uni_thesis = ["data/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+filterwarnings = ["error"]
